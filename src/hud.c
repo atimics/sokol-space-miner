@@ -316,7 +316,7 @@ static void split_hud_message_lines(const char* text, int max_cols, char* line0,
 
     size_t len = strlen(text);
     if ((int)len <= max_cols) {
-        snprintf(line0, line0_size, "%s", text);
+        snprintf(line0, line0_size, "%.*s", (int)(line0_size - 1), text);
         line1[0] = '\0';
         return;
     }
@@ -337,11 +337,11 @@ static void split_hud_message_lines(const char* text, int max_cols, char* line0,
     }
 
     if ((int)strlen(rest) <= max_cols) {
-        snprintf(line1, line1_size, "%s", rest);
+        snprintf(line1, line1_size, "%.*s", (int)(line1_size - 1), rest);
     } else if (max_cols > 3) {
         snprintf(line1, line1_size, "%.*s...", max_cols - 3, rest);
     } else {
-        snprintf(line1, line1_size, "%s", rest);
+        snprintf(line1, line1_size, "%.*s", (int)(line1_size - 1), rest);
     }
 }
 
@@ -361,7 +361,7 @@ static bool build_hud_message(char* label, size_t label_size, char* message, siz
         if (max_hull > 0.0f && LOCAL_PLAYER.ship.hull / max_hull < 0.20f) {
             label[0] = '\0';
             snprintf(message, message_size, "Hull failing. Dock for repairs.");
-            *r = PAL_WARNING; *g0 = 60; *b = 50;
+            *r = 255; *g0 = 60; *b = 50;
             return true;
         }
     }
