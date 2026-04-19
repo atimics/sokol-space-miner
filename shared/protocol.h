@@ -50,9 +50,12 @@ enum {
     NET_MSG_SIGNAL_CHANNEL  = 0x27, /* server -> client: broadcast-log snapshot / append (#316) */
 };
 
-/* Signal channel wire record: [id:u64][ts_ms:u32][sender:i8][text_len:u8][text:200] = 214 bytes
- * audio_url is server-side only for V1; agents read it via REST. */
-#define SIGNAL_CHANNEL_RECORD_SIZE (8 + 4 + 1 + 1 + 200)
+/* Signal channel wire record:
+ *   [id:u64][ts_ms:u32][sender:i8][text_len:u8][text:200][entry_hash:32] = 246 bytes
+ * audio_url is server-side only for V1; agents read it via REST.
+ * entry_hash is the SHA-256 chain link — clients can recompute and
+ * verify against this value to detect tampering / desync. */
+#define SIGNAL_CHANNEL_RECORD_SIZE (8 + 4 + 1 + 1 + 200 + 32)
 
 /* ------------------------------------------------------------------ */
 /* Plan operations (NET_MSG_PLAN payload byte 1)                      */

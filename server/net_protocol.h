@@ -266,6 +266,7 @@ static inline int serialize_signal_channel(uint8_t *buf, const signal_channel_t 
         p[12] = (uint8_t)(m->sender_station & 0xFF);
         p[13] = m->text_len;
         memcpy(&p[14], m->text, m->text_len);
+        memcpy(&p[14 + 200], m->entry_hash, 32);
     }
     return 3 + n * SIGNAL_CHANNEL_RECORD_SIZE;
 }

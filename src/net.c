@@ -584,6 +584,7 @@ static void handle_message(const uint8_t* data, int len) {
                 if (tlen >= SIGNAL_CHANNEL_TEXT_MAX) tlen = SIGNAL_CHANNEL_TEXT_MAX - 1;
                 memcpy(msgs[i].text, &p[14], tlen);
                 msgs[i].text[tlen] = '\0';
+                memcpy(msgs[i].entry_hash, &p[14 + 200], 32);
             }
             net_state.callbacks.on_signal_channel(msgs, count);
         }

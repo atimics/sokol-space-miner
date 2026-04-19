@@ -163,12 +163,14 @@ typedef void (*net_on_scaffolds_fn)(const NetScaffoldState* scaffolds, int count
 typedef void (*net_on_hail_response_fn)(uint8_t station, float credits, int contract_index);
 
 /* Signal-channel wire record (#316). audio_url isn't on the wire in V1;
- * agents reach it via the REST endpoint. */
+ * agents reach it via the REST endpoint. entry_hash carries the SHA-256
+ * chain link so clients can verify continuity locally. */
 typedef struct {
     uint64_t id;
     uint32_t timestamp_ms;
     int16_t  sender_station;  /* -1 = system */
     char     text[SIGNAL_CHANNEL_TEXT_MAX];
+    uint8_t  entry_hash[32];
 } NetSignalChannelMsg;
 
 typedef void (*net_on_signal_channel_fn)(const NetSignalChannelMsg *msgs, int count);
