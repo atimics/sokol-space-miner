@@ -36,10 +36,13 @@
 #define MINING_FRACTURE_SEED_BYTES 32
 #define MINING_BASE58_CAP          64   /* >= ceil(32 * 138/100) + terminator */
 
-/* Candidates per ton rolled at smelt time. An S-tier fragment carries
- * 8-14 tons → 800-1400 rolls, and the best grade among them sets the
- * payout multiplier. Tune here if the strike cadence needs to shift. */
-#define MINING_CANDIDATES_PER_TON  100
+/* Burst size per fragment, fixed regardless of ore tonnage. Small
+ * bursts keep "common" the modal outcome instead of best-of-N
+ * inflating every fragment to fine/rare. With prefix-anchored
+ * patterns this gives roughly: common 70%, fine 29%, rare 0.65%,
+ * RATi 0.14%, commissioned <0.01%. Bigger asteroids still pay more
+ * via the multiplier × ore_tons; the *quality* roll is fragment-flat. */
+#define MINING_BURST_PER_FRAGMENT  20
 
 /* ------------------------------------------------------------------ */
 /* Grade ladder                                                       */
@@ -86,38 +89,39 @@ static inline const char *mining_grade_label(mining_grade_t g) {
 /* Grade classification                                                */
 /* ------------------------------------------------------------------ */
 
-/* Classify a pubkey's base58 string. Pure inspection — no allocations.
- * Longest match wins; ties break to the higher grade.
+/* Classify a pubkey's base58 callsign. Pure inspection — anchored at
+ * position 0 so each grade is geometrically harder than the last and
+ * "best of N" can't inflate the ladder. With burst=20 per fragment
+ * this gives a clean ~70/29/0.65/0.14/<0.01 split.
  *
- * Grade 5 (commissioned) is NOT assigned here — it requires matching a
- * station-issued target pattern, checked server-side at sell time. */
+ *   commissioned = exact "RATi" prefix      (the brand lottery)
+ *   RATi         = 'R' + 'A' in first 4     (looser, reachable)
+ *   rare         = first 3 chars identical  (anchored triple)
+ *   fine         = first 2 chars identical  (anchored pair) */
 static inline mining_grade_t mining_classify_base58(const char *s) {
     if (!s || !s[0]) return MINING_GRADE_COMMON;
     size_t n = strlen(s);
 
-    /* Grade 3 — "RATi" anywhere (prefix, middle, tail — all the same tier). */
-    if (n >= 4) {
-        for (size_t i = 0; i + 4 <= n; i++) {
-            if (s[i] == 'R' && s[i+1] == 'A' && s[i+2] == 'T' && s[i+3] == 'i')
-                return MINING_GRADE_RATI;
+    /* Commissioned: exact RATi brand prefix. ~1 in 11M per candidate;
+     * effectively a session-long lottery even with bursts. */
+    if (n >= 4 && s[0] == 'R' && s[1] == 'A' && s[2] == 'T' && s[3] == 'i')
+        return MINING_GRADE_COMMISSIONED;
+
+    /* RATi: starts with 'R' and has 'A' in first 4 positions. Looser
+     * than exact-match so it actually surfaces in a session. */
+    if (n >= 4 && s[0] == 'R') {
+        for (size_t i = 1; i < 4; i++) {
+            if (s[i] == 'A') return MINING_GRADE_RATI;
         }
     }
 
-    /* Grade 2 — any 3 consecutive identical chars. */
-    if (n >= 3) {
-        for (size_t i = 0; i + 3 <= n; i++) {
-            if (s[i] == s[i+1] && s[i+1] == s[i+2])
-                return MINING_GRADE_RARE;
-        }
-    }
+    /* Rare: first three chars identical. */
+    if (n >= 3 && s[0] == s[1] && s[1] == s[2])
+        return MINING_GRADE_RARE;
 
-    /* Grade 1 — any two consecutive identical chars. */
-    if (n >= 2) {
-        for (size_t i = 0; i + 2 <= n; i++) {
-            if (s[i] == s[i+1])
-                return MINING_GRADE_FINE;
-        }
-    }
+    /* Fine: first two chars identical. */
+    if (n >= 2 && s[0] == s[1])
+        return MINING_GRADE_FINE;
 
     return MINING_GRADE_COMMON;
 }

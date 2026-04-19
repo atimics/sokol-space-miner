@@ -1156,25 +1156,34 @@ static void render_world(void) {
         }
         sgl_end();
 
-        /* Glow core (the "dot"): on S-tier fragments this is the
-         * RATi grade indicator — color reveals the rock's value to
-         * everyone, no tractor needed. M-tier still uses the
-         * commodity tint since they don't carry payable ore. Higher
-         * grades pulse and bloom larger. */
+        /* Glow core (the "dot"). Common fragments keep the original
+         * muted commodity tint — the belt should look mostly the
+         * same. Fine+ rocks get the grade tint with a halo + pulse so
+         * a strike actually catches the eye against the sea of dim
+         * dots. M-tier always uses commodity tint (no payable ore). */
         if (a->tier == ASTEROID_TIER_S) {
-            float cr, cg, cb;
-            grade_tint(a->grade, &cr, &cg, &cb);
-            float bloom = 1.0f;
-            float pulse = 1.0f;
-            if (a->grade >= 2) bloom = 1.20f + 0.20f * (float)(a->grade - 2);
-            if (a->grade >= 3) pulse = 1.0f + 0.18f * sinf(g.world.time * 6.0f);
-            float base_r = a->radius * lerpf(0.16f, 0.30f, progress_ratio) * bloom * pulse;
-            draw_circle_filled(a->pos, base_r, 10,
-                cr, cg, cb, lerpf(0.55f, 0.95f, progress_ratio));
-            /* Outer halo on rare+ so the dot reads from far away. */
-            if (a->grade >= 2) {
-                draw_circle_outline(a->pos, base_r * 1.8f, 16,
-                    cr, cg, cb, 0.45f * pulse);
+            if (a->grade == 0) {
+                /* Common: original commodity-tinted glow, untouched. */
+                float cr, cg, cb;
+                commodity_material_tint(a->commodity, &cr, &cg, &cb);
+                draw_circle_filled(a->pos, a->radius * lerpf(0.14f, 0.24f, progress_ratio), 10,
+                    lerpf(0.48f, cr * 1.6f, 0.5f), lerpf(0.96f, cg * 1.6f, 0.5f),
+                    lerpf(0.78f, cb * 1.6f, 0.5f), lerpf(0.35f, 0.8f, progress_ratio));
+            } else {
+                /* Graded: special tint, bloom + halo scale with grade. */
+                float cr, cg, cb;
+                grade_tint(a->grade, &cr, &cg, &cb);
+                float bloom = 1.10f + 0.18f * (float)(a->grade - 1);
+                float pulse = (a->grade >= 3)
+                    ? (1.0f + 0.18f * sinf(g.world.time * 6.0f))
+                    : 1.0f;
+                float base_r = a->radius * lerpf(0.18f, 0.30f, progress_ratio) * bloom * pulse;
+                draw_circle_filled(a->pos, base_r, 12,
+                    cr, cg, cb, lerpf(0.65f, 0.95f, progress_ratio));
+                if (a->grade >= 2) {
+                    draw_circle_outline(a->pos, base_r * 1.9f, 18,
+                        cr, cg, cb, 0.45f * pulse);
+                }
             }
         } else if (a->tier == ASTEROID_TIER_M) {
             float cr, cg, cb;

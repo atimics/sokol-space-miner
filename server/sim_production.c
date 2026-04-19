@@ -161,12 +161,9 @@ static const uint8_t MINING_UNIVERSE_KEY[32] = {
 };
 
 mining_grade_t sim_roll_fragment_grade(const asteroid_t *a) {
-    int tons = (int)lroundf(a->ore);
-    if (tons <= 0) tons = 1;
-    int burst = tons * MINING_CANDIDATES_PER_TON;
-
+    (void)a; /* ore tonnage no longer scales burst — flat per-fragment */
     mining_grade_t best = MINING_GRADE_COMMON;
-    for (int i = 0; i < burst; i++) {
+    for (int i = 0; i < MINING_BURST_PER_FRAGMENT; i++) {
         mining_keypair_t kp;
         mining_keypair_derive(a->fracture_seed, MINING_UNIVERSE_KEY, (uint32_t)i, &kp);
         char callsign[8];
