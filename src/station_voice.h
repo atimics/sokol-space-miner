@@ -246,7 +246,7 @@ static const hail_response_t HELIOS_HAILS[] = {
 #define HELIOS_HAIL_COUNT (int)(sizeof(HELIOS_HAILS) / sizeof(HELIOS_HAILS[0]))
 
 /* Lookup table for station index → response array */
-static const hail_response_t *STATION_HAIL_TABLES[] = {
+static const hail_response_t *STATION_HAIL_TABLES[] __attribute__((unused)) = {
     PROSPECT_HAILS, KEPLER_HAILS, HELIOS_HAILS,
 };
 static const int STATION_HAIL_COUNTS[] = {
