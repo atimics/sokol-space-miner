@@ -147,20 +147,20 @@ void sim_step_station_production(world_t *w, float dt) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Grade roll on tractor (RATi IS the ore — players sign at tow)       */
+/* Grade roll at fracture (universe-determined, public)                */
 /* ------------------------------------------------------------------ */
 
-/* Roll the capped burst against the fragment's stamped fracture_seed
- * keyed on the tower's session identity. Each ownership transition
- * runs this fresh, so theft starts a new roll with the thief's key —
- * the original owner's lucky stash doesn't transfer. Budget is
- * MINING_CANDIDATES_PER_TON × ore_tons, fixed at fracture; tow time
- * never multiplies it. */
-mining_grade_t sim_roll_fragment_grade(const asteroid_t *a,
-                                       const server_player_t *tower) {
-    uint8_t player_key[32];
-    sha256_bytes(tower->session_token, 8, player_key);
+/* Roll the capped burst against the fragment's fracture_seed using a
+ * fixed "universe key" (no per-player input). Grade is a property of
+ * the rock itself: every observer sees the same value, the rock's dot
+ * color reveals it instantly, theft is for a known prize. Budget is
+ * MINING_CANDIDATES_PER_TON × ore_tons. */
+static const uint8_t MINING_UNIVERSE_KEY[32] = {
+    'R','A','T','i',  '/','o','r','e',  '/','u','n','i', 'v','e','r','s',
+    'e','/','v','1',  0,0,0,0,           0,0,0,0,         0,0,0,0
+};
 
+mining_grade_t sim_roll_fragment_grade(const asteroid_t *a) {
     int tons = (int)lroundf(a->ore);
     if (tons <= 0) tons = 1;
     int burst = tons * MINING_CANDIDATES_PER_TON;
@@ -168,7 +168,7 @@ mining_grade_t sim_roll_fragment_grade(const asteroid_t *a,
     mining_grade_t best = MINING_GRADE_COMMON;
     for (int i = 0; i < burst; i++) {
         mining_keypair_t kp;
-        mining_keypair_derive(a->fracture_seed, player_key, (uint32_t)i, &kp);
+        mining_keypair_derive(a->fracture_seed, MINING_UNIVERSE_KEY, (uint32_t)i, &kp);
         char callsign[8];
         mining_callsign_from_pubkey(kp.pub, callsign);
         mining_grade_t g = mining_classify_base58(callsign);

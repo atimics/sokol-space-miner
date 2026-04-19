@@ -44,10 +44,11 @@ int lod_segments(int base_segments, float radius) {
     return base_segments;
 }
 
-/* Tow-line tint by RATi grade. Common = neutral teal (matches baseline
- * ore feel); higher grades shift warmer and brighter. Used by both
- * the leashed beam and the passive tether. */
-static void grade_tint(uint8_t grade, float *r, float *g, float *b) {
+/* RATi grade → tint. Common is a neutral ore tone; higher grades
+ * shift warmer and brighter. Visible in two places: the rock's glow
+ * core (the in-world dot — every observer sees it from any range)
+ * and the tow-line tether (only on rocks the player has grabbed). */
+void grade_tint(uint8_t grade, float *r, float *g, float *b) {
     switch (grade) {
     case 1:  *r = 0.55f; *g = 0.95f; *b = 0.70f; break; /* fine — pale mint */
     case 2:  *r = 1.00f; *g = 0.78f; *b = 0.32f; break; /* rare — warm amber */

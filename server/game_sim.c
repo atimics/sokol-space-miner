@@ -1281,19 +1281,14 @@ static void step_fragment_collection(world_t *w, server_player_t *sp, float dt) 
         if (d_sq <= tr_sq) {
             sp->tractor_fragments++;
             /* Instant grab: tractor pulse snaps fragments to tow chain.
-             * No drift phase — if it's in range and there's room, grab it. */
+             * No drift phase — if it's in range and there's room, grab it.
+             * Grade was rolled at fracture and is already on the rock; we
+             * just stamp ownership for the smelt-time payout split. */
             if (sp->ship.towed_count < max_tow) {
                 sp->ship.towed_fragments[sp->ship.towed_count] = (int16_t)i;
                 sp->ship.towed_count++;
-                int8_t prev_tower = a->last_towed_by;
                 a->last_towed_by = (int8_t)sp->id;
                 sp->ship.stat_ore_mined += a->ore;
-                /* Roll the grade fresh whenever ownership changes.
-                 * Each player signs the fragment with their own key. */
-                if (prev_tower != (int8_t)sp->id) {
-                    a->grade = (uint8_t)sim_roll_fragment_grade(a, sp);
-                    a->net_dirty = true;
-                }
                 emit_event(w, (sim_event_t){.type = SIM_EVENT_PICKUP, .player_id = sp->id,
                                             .pickup = {.ore = a->ore, .fragments = 1}});
             }

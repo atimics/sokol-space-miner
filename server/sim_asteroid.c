@@ -3,6 +3,7 @@
  * maintenance, and per-frame dynamics.  Extracted from game_sim.c.
  */
 #include "sim_asteroid.h"
+#include "sim_production.h"  /* sim_roll_fragment_grade */
 #include "chunk.h"
 #include "rng.h"
 #include "mining.h"  /* fracture_seed_compute */
@@ -250,8 +251,7 @@ void fracture_asteroid(world_t *w, int idx, vec2 outward_dir, int8_t fractured_b
         child->grade = 0;
 
         /* Stamp the fracture_seed on each child. Deterministic from
-         * the child's birth state — every observer reproduces it and
-         * the grade roll on tractor is verifiable. */
+         * the child's birth state — every observer reproduces it. */
         mining_fracture_inputs_t mi;
         memset(&mi, 0, sizeof(mi));
         mi.asteroid_id         = (uint16_t)child_slots[i];
@@ -263,6 +263,15 @@ void fracture_asteroid(world_t *w, int idx, vec2 outward_dir, int8_t fractured_b
         mi.world_time_ms       = (uint64_t)(w->time * 1000.0);
         mi.fractured_by        = (uint8_t)fractured_by;
         mining_fracture_seed_compute(&mi, child->fracture_seed);
+
+        /* Universe-rolled grade is public from birth. Only S-tier
+         * children carry payable ore; others stay grade 0 and don't
+         * roll (saves CPU on the cascade). */
+        if (child->tier == ASTEROID_TIER_S && child->ore > 0.0f) {
+            child->grade = (uint8_t)sim_roll_fragment_grade(child);
+        } else {
+            child->grade = 0;
+        }
     }
 
     /* audio_play_fracture removed */

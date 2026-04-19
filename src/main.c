@@ -1156,13 +1156,26 @@ static void render_world(void) {
         }
         sgl_end();
 
-        /* Glow core for small/medium asteroids */
+        /* Glow core (the "dot"): on S-tier fragments this is the
+         * RATi grade indicator — color reveals the rock's value to
+         * everyone, no tractor needed. M-tier still uses the
+         * commodity tint since they don't carry payable ore. Higher
+         * grades pulse and bloom larger. */
         if (a->tier == ASTEROID_TIER_S) {
             float cr, cg, cb;
-            commodity_material_tint(a->commodity, &cr, &cg, &cb);
-            draw_circle_filled(a->pos, a->radius * lerpf(0.14f, 0.24f, progress_ratio), 10,
-                lerpf(0.48f, cr * 1.6f, 0.5f), lerpf(0.96f, cg * 1.6f, 0.5f),
-                lerpf(0.78f, cb * 1.6f, 0.5f), lerpf(0.35f, 0.8f, progress_ratio));
+            grade_tint(a->grade, &cr, &cg, &cb);
+            float bloom = 1.0f;
+            float pulse = 1.0f;
+            if (a->grade >= 2) bloom = 1.20f + 0.20f * (float)(a->grade - 2);
+            if (a->grade >= 3) pulse = 1.0f + 0.18f * sinf(g.world.time * 6.0f);
+            float base_r = a->radius * lerpf(0.16f, 0.30f, progress_ratio) * bloom * pulse;
+            draw_circle_filled(a->pos, base_r, 10,
+                cr, cg, cb, lerpf(0.55f, 0.95f, progress_ratio));
+            /* Outer halo on rare+ so the dot reads from far away. */
+            if (a->grade >= 2) {
+                draw_circle_outline(a->pos, base_r * 1.8f, 16,
+                    cr, cg, cb, 0.45f * pulse);
+            }
         } else if (a->tier == ASTEROID_TIER_M) {
             float cr, cg, cb;
             commodity_material_tint(a->commodity, &cr, &cg, &cb);
