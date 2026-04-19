@@ -1172,7 +1172,13 @@ void draw_station_services(const station_ui_state_t* ui) {
             int n = mc->strikes_by_grade[gi];
             if (n == 0) continue;
             sdtx_pos(ui_text_pos(cx), ui_text_pos(ly));
-            sdtx_color3b(gi >= (int)MINING_GRADE_RATI ? PAL_ORE_AMBER : PAL_TEXT_SECONDARY);
+            /* Avoid PAL_X inside a ternary — the macros are 3-arg
+             * comma-separated literals, gcc -Werror=unused-value flags
+             * the comma operator that the ternary creates. */
+            if (gi >= (int)MINING_GRADE_RATI)
+                sdtx_color3b(PAL_ORE_AMBER);
+            else
+                sdtx_color3b(PAL_TEXT_SECONDARY);
             sdtx_printf("%-13s  x%d", grade_labels[gi], n);
             ly += 14.0f;
         }

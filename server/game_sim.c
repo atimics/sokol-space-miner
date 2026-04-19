@@ -34,7 +34,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>   /* _mkdir */
+#else
 #include <dirent.h>
+#endif
 
 /* SIM_LOG moved to game_sim.h so all sim_*.c files share the same macro. */
 
@@ -3364,8 +3368,6 @@ uint64_t signal_channel_post(world_t *w, int sender_station, const char *text, c
 void signal_chain_load(world_t *w) {
     if (!w) return;
     signal_channel_t *ch = &w->signal_channel;
-    DIR *dir = opendir("chain");
-    if (!dir) return;
     /* Two-pass: first pass collects all blocks across all stations into
      * a sortable buffer; second sorts by id and inserts the latest
      * SIGNAL_CHANNEL_CAPACITY into the ring. The chain spans the whole
@@ -3373,6 +3375,11 @@ void signal_chain_load(world_t *w) {
     enum { SCRATCH_CAP = 4096 };
     static signal_channel_msg_t scratch[SCRATCH_CAP];
     int collected = 0;
+#ifndef _WIN32
+    /* POSIX directory walk. Windows server is build-only (no production
+     * deploy), so we no-op there to keep the cross-compile clean. */
+    DIR *dir = opendir("chain");
+    if (!dir) return;
     struct dirent *de;
     while ((de = readdir(dir)) != NULL && collected < SCRATCH_CAP) {
         const char *name = de->d_name;
@@ -3392,6 +3399,7 @@ void signal_chain_load(world_t *w) {
         fclose(f);
     }
     closedir(dir);
+#endif
 
     /* Sort by id (insertion sort — collected is small in practice). */
     for (int i = 1; i < collected; i++) {
