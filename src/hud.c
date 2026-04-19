@@ -49,12 +49,26 @@ static const float UI_SCALE_COMPACT = 1.60f;
 static const float UI_SCALE_DEFAULT = 1.42f;
 static const float UI_SCALE_WIDE    = 1.28f;
 
+/* Safari has been seen to return NaN briefly from sapp_widthf /
+ * sapp_dpi_scale on the frame the audio context resumes (the gesture
+ * that also fires LAUNCH). NaN here propagates into ui_scale, then
+ * into sdtx_canvas, which fails a hard assert. Clamp each sokol
+ * reading to something sane — the ortho/text layout is wrong for one
+ * frame but the app keeps running. */
+static inline float ui_safe_positive(float v, float fallback) {
+    return (isfinite(v) && v > 0.0f) ? v : fallback;
+}
+
 float ui_window_width(void) {
-    return sapp_widthf() / fmaxf(1.0f, sapp_dpi_scale());
+    float px  = ui_safe_positive(sapp_widthf(), 1280.0f);
+    float dpi = ui_safe_positive(sapp_dpi_scale(), 1.0f);
+    return px / fmaxf(1.0f, dpi);
 }
 
 float ui_window_height(void) {
-    return sapp_heightf() / fmaxf(1.0f, sapp_dpi_scale());
+    float px  = ui_safe_positive(sapp_heightf(), 720.0f);
+    float dpi = ui_safe_positive(sapp_dpi_scale(), 1.0f);
+    return px / fmaxf(1.0f, dpi);
 }
 
 float ui_scale(void) {
