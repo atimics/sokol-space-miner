@@ -63,7 +63,10 @@ typedef struct {
 
 typedef struct {
     const char* action;
-    char state[32];
+    /* Sized to fit "%d %s" with int up to 11 chars, space, and a full
+     * 32-char currency_name + null. Linux gcc -Werror=format-truncation
+     * proves this from the snprintf sites in build_station_service_lines. */
+    char state[48];
     uint8_t r;
     uint8_t g0;
     uint8_t b;
