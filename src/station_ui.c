@@ -738,8 +738,12 @@ void draw_station_services(const station_ui_state_t* ui) {
                 const char *suffix = strchr(rendered, '-');
                 suffix = suffix ? suffix + 1 : rendered;
                 sdtx_pos(ui_text_pos(cx + 3.0f), ui_text_pos(my));
-                sdtx_color3b(ing->prefix_class >= INGOT_PREFIX_RATI
-                             ? PAL_ORE_AMBER : PAL_TEXT_SECONDARY);
+                /* PAL_X macros are 3-arg comma literals — using one
+                 * inside a ternary trips gcc -Werror=unused-value. */
+                if (ing->prefix_class >= INGOT_PREFIX_RATI)
+                    sdtx_color3b(PAL_ORE_AMBER);
+                else
+                    sdtx_color3b(PAL_TEXT_SECONDARY);
                 sdtx_printf("%s-grade %s lot %s",
                             grade,
                             commodity_short_name((commodity_t)ing->metal),
