@@ -10,6 +10,7 @@
 #include "station_voice.h"
 #include "world_draw.h"
 #include "avatar.h"
+#include "mining_client.h"
 #include "signal_model.h"
 #include "palette.h"
 
@@ -879,7 +880,8 @@ void draw_hud(void) {
         sdtx_pos(top_text_x, top_row_0);
         sdtx_color3b(PAL_TEXT_PRIMARY);
         {
-            const char *cs = net_local_callsign();
+            const char *mc = mining_client_get()->player_callsign;
+            const char *cs = (mc && mc[0] != '\0' && mc[0] != '_') ? mc : net_local_callsign();
             const char *tag = (cs && cs[0] != '\0') ? cs : (LOCAL_PLAYER.docked ? "RUN" : "SHIP");
             sdtx_printf("%s // CR %d", tag, credits);
         }
@@ -999,7 +1001,8 @@ void draw_hud(void) {
     sdtx_pos(top_text_x, top_row_0);
     sdtx_color3b(PAL_TEXT_PRIMARY);
     {
-        const char *cs = net_local_callsign();
+        const char *mc = mining_client_get()->player_callsign;
+        const char *cs = (mc && mc[0] != '\0' && mc[0] != '_') ? mc : net_local_callsign();
         const char *fallback = LOCAL_PLAYER.docked ? "RUN STATUS" : "SHIP STATUS";
         if (cs && cs[0] != '\0')
             sdtx_printf("%s // %s", cs, LOCAL_PLAYER.docked ? "DOCKED" : "FLIGHT");

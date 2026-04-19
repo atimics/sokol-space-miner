@@ -97,52 +97,45 @@ static void generate_player_keypair(mining_keypair_t *out) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Fracture event → mining burst                                       */
+/* Pickup event → mining burst (size scales with ore tonnage)          */
 /* ------------------------------------------------------------------ */
 
 static void build_inputs_from_world(const world_t *w,
                                     int local_player_slot,
-                                    int asteroid_id,
                                     mining_fracture_inputs_t *out) {
     memset(out, 0, sizeof(*out));
-    out->asteroid_id = (uint16_t)asteroid_id;
     out->fractured_by = (uint8_t)local_player_slot;
 
-    if (asteroid_id >= 0 && asteroid_id < MAX_ASTEROIDS) {
-        const asteroid_t *a = &w->asteroids[asteroid_id];
-        out->asteroid_pos_x_q = mining_q100_(a->pos.x);
-        out->asteroid_pos_y_q = mining_q100_(a->pos.y);
-        out->asteroid_rotation_q = mining_q1000_(a->rotation);
-    }
     if (local_player_slot >= 0 && local_player_slot < MAX_PLAYERS) {
         const ship_t *s = &w->players[local_player_slot].ship;
         out->ship_pos_x_q = mining_q100_(s->pos.x);
         out->ship_pos_y_q = mining_q100_(s->pos.y);
         out->ship_angle_q = mining_q1000_(s->angle);
-        /* outward_dir derived from ship→asteroid vector; for client-only
-         * entropy we just stuff the ship angle. Server-authoritative
-         * version will pass the real outward_dir in the event payload. */
         out->outward_dir_q = mining_q1000_(s->angle);
     }
     out->world_time_ms = (uint64_t)(w->time * 1000.0);
 }
 
-void mining_client_on_fracture(const world_t *w,
-                               int local_player_slot,
-                               int asteroid_id) {
+void mining_client_on_pickup(const world_t *w,
+                             int local_player_slot,
+                             float ore_tons) {
     if (!g_mining.player_ready) return;
     if (g_mining.holdings_count >= MINING_HOLDINGS_MAX) return;
+    if (ore_tons <= 0.0f) return;
+
+    int burst_size = (int)(ore_tons * (float)MINING_CANDIDATES_PER_TON + 0.5f);
+    if (burst_size <= 0) return;
 
     mining_fracture_inputs_t inputs;
-    build_inputs_from_world(w, local_player_slot, asteroid_id, &inputs);
+    build_inputs_from_world(w, local_player_slot, &inputs);
 
     uint8_t seed[32];
     mining_fracture_seed_compute(&inputs, seed);
 
-    mining_grade_t best = MINING_GRADE_CHATTER;
+    mining_grade_t best = MINING_GRADE_COMMON;
     char best_callsign[8] = {0};
 
-    for (int i = 0; i < MINING_BURST_PER_FRACTURE; i++) {
+    for (int i = 0; i < burst_size; i++) {
         if (g_mining.holdings_count >= MINING_HOLDINGS_MAX) break;
 
         mining_keypair_t kp;
@@ -157,7 +150,7 @@ void mining_client_on_fracture(const world_t *w,
         mined_keypair_t *slot = &g_mining.holdings[g_mining.holdings_count++];
         slot->keypair = kp;
         slot->grade = (uint8_t)grade;
-        slot->asteroid_id = (uint16_t)asteroid_id;
+        slot->asteroid_id = 0;
         slot->world_tick_ms = (uint32_t)inputs.world_time_ms;
 
         g_mining.holdings_by_grade[grade]++;
@@ -169,8 +162,8 @@ void mining_client_on_fracture(const world_t *w,
         }
     }
 
-    /* Badge only rare finds — chatter floods the HUD otherwise. */
-    if (best >= MINING_GRADE_PAIR) {
+    /* Badge only rare finds — common ore floods the HUD otherwise. */
+    if (best >= MINING_GRADE_RARE) {
         g_mining.recent_find_timer = 3.0f;
         g_mining.recent_find_grade = best;
         memcpy(g_mining.recent_find_callsign, best_callsign,

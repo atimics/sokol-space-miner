@@ -1133,32 +1133,32 @@ void draw_station_services(const station_ui_state_t* ui) {
         sdtx_printf("CALLSIGN  %s", mc->player_callsign);
         sdtx_color3b(PAL_STATION_HINT);
         sdtx_pos(ui_text_pos(cx), ui_text_pos(cy + 14.0f));
-        sdtx_puts("keypairs mined from fracture entropy");
+        sdtx_puts("ore quality sorted by fracture signature");
 
         float ly = cy + 34.0f;
         if (mc->holdings_count == 0) {
             sdtx_color3b(PAL_STATUS_DISABLED);
             sdtx_pos(ui_text_pos(cx), ui_text_pos(ly));
-            sdtx_puts("(no finds yet — fracture an asteroid)");
+            sdtx_puts("(no ore yet — fracture an asteroid)");
             break;
         }
 
         static const char *const grade_labels[MINING_GRADE_COUNT] = {
-            "chatter", "pair", "triple", "RATi", "RATi prefix", "commissioned"
+            "common", "fine", "rare", "RATi", "commissioned"
         };
         for (int gi = MINING_GRADE_COUNT - 1; gi >= 0; gi--) {
             int n = mc->holdings_by_grade[gi];
             if (n == 0) continue;
             int value = n * mining_payout_for_grade((mining_grade_t)gi);
             sdtx_pos(ui_text_pos(cx), ui_text_pos(ly));
-            sdtx_color3b(gi >= (int)MINING_GRADE_RATI_ANY ? PAL_ORE_AMBER : PAL_TEXT_SECONDARY);
+            sdtx_color3b(gi >= (int)MINING_GRADE_RATI ? PAL_ORE_AMBER : PAL_TEXT_SECONDARY);
             sdtx_printf("%-13s  x%-5d  %d cr", grade_labels[gi], n, value);
             ly += 14.0f;
         }
         ly += 8.0f;
         sdtx_color3b(PAL_TEXT_PRIMARY);
         sdtx_pos(ui_text_pos(cx), ui_text_pos(ly));
-        sdtx_printf("%d keypairs  ->  %d cr total",
+        sdtx_printf("%d samples  ->  %d cr total",
                     mc->holdings_count, mc->total_value_cached);
         break;
     }

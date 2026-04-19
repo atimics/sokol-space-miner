@@ -287,10 +287,13 @@ void process_sim_events(const sim_events_t *events) {
         switch (ev->type) {
             case SIM_EVENT_FRACTURE:
                 audio_play_fracture(&g.audio, ev->fracture.tier);
-                if (ev->player_id == g.local_player_slot) {
+                if (ev->player_id == g.local_player_slot)
                     onboarding_mark_fractured();
-                    mining_client_on_fracture(&g.world, g.local_player_slot,
-                                              ev->fracture.asteroid_id);
+                break;
+            case SIM_EVENT_PICKUP:
+                if (ev->player_id == g.local_player_slot) {
+                    mining_client_on_pickup(&g.world, g.local_player_slot,
+                                            ev->pickup.ore);
                 }
                 break;
             case SIM_EVENT_MINING_TICK:

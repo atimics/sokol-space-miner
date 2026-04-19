@@ -36,8 +36,11 @@
 #define MINING_FRACTURE_SEED_BYTES 32
 #define MINING_BASE58_CAP          64   /* >= ceil(32 * 138/100) + terminator */
 
-/* Tunable in one place — balance dial for the whole economy. */
-#define MINING_BURST_PER_FRACTURE  50
+/* Balance dial: candidates generated per ton of ore delivered.
+ * An S-tier fragment carries 8-14 tons, so one tow-in ≈ 800-1400
+ * candidates, and a full XXL→S cascade delivers tens of thousands.
+ * Tune here if the grade-3+ strike cadence needs to shift. */
+#define MINING_CANDIDATES_PER_TON  100
 
 /* Maximum keypairs a client keeps locally. Hard cap to keep
  * localStorage footprint bounded; overflow silently drops new ones. */
@@ -52,24 +55,22 @@
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    MINING_GRADE_CHATTER   = 0,  /* no pattern */
-    MINING_GRADE_PAIR      = 1,  /* any 2-char repeat somewhere */
-    MINING_GRADE_TRIPLE    = 2,  /* any 3-char repeat or RAT / ATI substring */
-    MINING_GRADE_RATI_ANY  = 3,  /* "RATi" somewhere in the base58 */
-    MINING_GRADE_RATI_PFX  = 4,  /* "RATi" at position 0 */
-    MINING_GRADE_RATI_SEQ  = 5,  /* commissioned exact pattern (RATi001 etc.) — server-assigned */
-    MINING_GRADE_COUNT     = 6
+    MINING_GRADE_COMMON       = 0,  /* no pattern */
+    MINING_GRADE_FINE         = 1,  /* any 2-char repeat somewhere */
+    MINING_GRADE_RARE         = 2,  /* 3-in-a-row identical chars */
+    MINING_GRADE_RATI         = 3,  /* "RATi" anywhere in the base58 */
+    MINING_GRADE_COMMISSIONED = 4,  /* matches an open station commission */
+    MINING_GRADE_COUNT        = 5
 } mining_grade_t;
 
-/* Ledger value per keypair, applied by the receiving station. */
+/* Ledger value per sample, applied by the receiving station. */
 static inline int mining_payout_for_grade(mining_grade_t g) {
     switch (g) {
-    case MINING_GRADE_CHATTER:  return 1;
-    case MINING_GRADE_PAIR:     return 10;
-    case MINING_GRADE_TRIPLE:   return 100;
-    case MINING_GRADE_RATI_ANY: return 1000;
-    case MINING_GRADE_RATI_PFX: return 25000;
-    case MINING_GRADE_RATI_SEQ: return 500000;
+    case MINING_GRADE_COMMON:       return 1;
+    case MINING_GRADE_FINE:         return 10;
+    case MINING_GRADE_RARE:         return 100;
+    case MINING_GRADE_RATI:         return 10000;
+    case MINING_GRADE_COMMISSIONED: return 500000;
     default: return 0;
     }
 }
@@ -77,12 +78,11 @@ static inline int mining_payout_for_grade(mining_grade_t g) {
 /* Short human label for HUD / channel copy. */
 static inline const char *mining_grade_label(mining_grade_t g) {
     switch (g) {
-    case MINING_GRADE_CHATTER:  return "chatter";
-    case MINING_GRADE_PAIR:     return "pair";
-    case MINING_GRADE_TRIPLE:   return "triple";
-    case MINING_GRADE_RATI_ANY: return "RATi";
-    case MINING_GRADE_RATI_PFX: return "RATi prefix";
-    case MINING_GRADE_RATI_SEQ: return "commissioned";
+    case MINING_GRADE_COMMON:       return "common";
+    case MINING_GRADE_FINE:         return "fine";
+    case MINING_GRADE_RARE:         return "rare";
+    case MINING_GRADE_RATI:         return "RATi";
+    case MINING_GRADE_COMMISSIONED: return "commissioned";
     default: return "?";
     }
 }
@@ -97,28 +97,22 @@ static inline const char *mining_grade_label(mining_grade_t g) {
  * Grade 5 (commissioned) is NOT assigned here — it requires matching a
  * station-issued target pattern, checked server-side at sell time. */
 static inline mining_grade_t mining_classify_base58(const char *s) {
-    if (!s || !s[0]) return MINING_GRADE_CHATTER;
+    if (!s || !s[0]) return MINING_GRADE_COMMON;
     size_t n = strlen(s);
 
-    /* Grade 4 — "RATi" at position 0 (prefix). */
-    if (n >= 4 && s[0] == 'R' && s[1] == 'A' && s[2] == 'T' && s[3] == 'i')
-        return MINING_GRADE_RATI_PFX;
-
-    /* Grade 3 — "RATi" anywhere. */
+    /* Grade 3 — "RATi" anywhere (prefix, middle, tail — all the same tier). */
     if (n >= 4) {
         for (size_t i = 0; i + 4 <= n; i++) {
             if (s[i] == 'R' && s[i+1] == 'A' && s[i+2] == 'T' && s[i+3] == 'i')
-                return MINING_GRADE_RATI_ANY;
+                return MINING_GRADE_RATI;
         }
     }
 
-    /* Grade 2 — "RAT" anywhere OR any 3 consecutive identical chars. */
+    /* Grade 2 — any 3 consecutive identical chars. */
     if (n >= 3) {
         for (size_t i = 0; i + 3 <= n; i++) {
-            if (s[i] == 'R' && s[i+1] == 'A' && s[i+2] == 'T')
-                return MINING_GRADE_TRIPLE;
             if (s[i] == s[i+1] && s[i+1] == s[i+2])
-                return MINING_GRADE_TRIPLE;
+                return MINING_GRADE_RARE;
         }
     }
 
@@ -126,11 +120,11 @@ static inline mining_grade_t mining_classify_base58(const char *s) {
     if (n >= 2) {
         for (size_t i = 0; i + 2 <= n; i++) {
             if (s[i] == s[i+1])
-                return MINING_GRADE_PAIR;
+                return MINING_GRADE_FINE;
         }
     }
 
-    return MINING_GRADE_CHATTER;
+    return MINING_GRADE_COMMON;
 }
 
 /* ------------------------------------------------------------------ */

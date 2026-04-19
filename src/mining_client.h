@@ -1,15 +1,16 @@
 /*
  * mining_client.h -- Client-side RATi mining loop (Phase 1).
  *
- * Subscribes to SIM_EVENT_FRACTURE, runs a 50-candidate SHA-256 burst,
- * classifies each candidate by base58 prefix pattern, and collects the
- * resulting "keypairs" into a local holdings pool. Station sell wire
- * picks these up later (Task #7).
+ * Subscribes to SIM_EVENT_PICKUP (tractored fragment). The burst
+ * size scales with the fragment's ore tonnage, so bigger hauls yield
+ * more candidates. Each candidate is a SHA-256 pseudokey whose
+ * base58 prefix is classified for grade (common → fine → rare →
+ * RATi → commissioned).
  *
  * Phase-1 entropy is client-local: each player seeds their own burst
- * from their ship state + asteroid_id + world time. Server does not
- * verify finds this round — the economy is trust-on-first-sell. V1.5
- * makes the fracture seed authoritative so stations can cross-check.
+ * from ship state + asteroid_id + world time. Server does not verify
+ * finds this round — the economy is trust-on-first-sell. V1.5 makes
+ * the pickup seed authoritative so stations can cross-check.
  */
 #ifndef CLIENT_MINING_H
 #define CLIENT_MINING_H
@@ -50,10 +51,11 @@ typedef struct {
 /* Initialise player keypair + holdings (reads localStorage in wasm). */
 void mining_client_init(void);
 
-/* Drive the 50-candidate burst using the local ship state + event id. */
-void mining_client_on_fracture(const world_t *w,
-                               int local_player_slot,
-                               int asteroid_id);
+/* Run a burst sized by the fragment's ore tonnage. Called on every
+ * SIM_EVENT_PICKUP the local player triggers. */
+void mining_client_on_pickup(const world_t *w,
+                             int local_player_slot,
+                             float ore_tons);
 
 /* Per-frame timers (fades the recent-find HUD badge). */
 void mining_client_tick(float dt);
