@@ -668,6 +668,7 @@ void draw_hud_panels(void) {
             visible_tabs[tab_count++] = STATION_TAB_SHIPYARD;
         }
         visible_tabs[tab_count++] = STATION_TAB_NETWORK;
+        visible_tabs[tab_count++] = STATION_TAB_HOLDINGS;
         float tab_w = fminf(inner_w / (float)tab_count, 96.0f);
 
         for (int t = 0; t < tab_count; t++) {

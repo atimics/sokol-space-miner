@@ -479,7 +479,7 @@ typedef struct {
     sim_event_type_t type;
     int player_id;
     union {
-        struct { asteroid_tier_t tier; } fracture;
+        struct { asteroid_tier_t tier; int asteroid_id; } fracture;
         struct { float ore; int fragments; } pickup;
         struct { ship_upgrade_t upgrade; } upgrade;
         struct { float amount; } damage;

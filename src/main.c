@@ -15,6 +15,7 @@
 #include "onboarding.h"
 #include "station_voice.h"
 #include "avatar.h"
+#include "mining_client.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -286,8 +287,11 @@ void process_sim_events(const sim_events_t *events) {
         switch (ev->type) {
             case SIM_EVENT_FRACTURE:
                 audio_play_fracture(&g.audio, ev->fracture.tier);
-                if (ev->player_id == g.local_player_slot)
+                if (ev->player_id == g.local_player_slot) {
                     onboarding_mark_fractured();
+                    mining_client_on_fracture(&g.world, g.local_player_slot,
+                                              ev->fracture.asteroid_id);
+                }
                 break;
             case SIM_EVENT_MINING_TICK:
                 if (ev->player_id == g.local_player_slot) {
@@ -533,6 +537,7 @@ static void sim_step(float dt) {
     }
     if (g.outpost_lock_timer > 0.0f)
         g.outpost_lock_timer = fmaxf(0.0f, g.outpost_lock_timer - dt);
+    mining_client_tick(dt);
 
     /* Smoothed fog intensity. Tracks 1 - hull/max_hull, but eases in
      * (slow ramp up) and out (faster ramp down) so the vignette rolls
@@ -809,6 +814,7 @@ static void init(void) {
     init_starfield();
     reset_world();
     onboarding_load();
+    mining_client_init();
 
     /* --- Multiplayer: auto-connect if server URL is available --- */
     {
