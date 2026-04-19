@@ -660,6 +660,8 @@ static void sim_step(float dt) {
         if (cst && station_has_module(cst, MODULE_SHIPYARD)) {
             vtabs[vtab_count++] = STATION_TAB_SHIPYARD;
         }
+        vtabs[vtab_count++] = STATION_TAB_NETWORK;
+        vtabs[vtab_count++] = STATION_TAB_HOLDINGS;
         int cur = 0;
         for (int i = 0; i < vtab_count; i++) { if (vtabs[i] == g.station_tab) { cur = i; break; } }
         int dir = is_key_pressed(SAPP_KEYCODE_TAB) ? 1 : (vtab_count - 1);
