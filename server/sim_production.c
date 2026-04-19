@@ -434,6 +434,7 @@ void step_furnace_smelting(world_t *w, float dt) {
                 char text[96];
                 snprintf(text, sizeof(text), "smelted %s", cs);
                 ing->mined_block = signal_channel_post(w, smelt_station, text, "");
+                st->named_ingots_dirty = true;
             }
 
             clear_asteroid(a);

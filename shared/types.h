@@ -281,6 +281,7 @@ typedef struct {
      * hulls bound to the ingot's pubkey identity. LRU evict on full. */
     named_ingot_t named_ingots[STATION_NAMED_INGOTS_MAX];
     int           named_ingots_count;
+    bool          named_ingots_dirty;  /* server-only: drives wire push */
 } station_t;
 
 /* Station lifecycle helpers, module queries, and ring/geometry helpers
