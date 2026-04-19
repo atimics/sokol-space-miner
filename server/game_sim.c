@@ -3378,8 +3378,11 @@ void signal_chain_load(world_t *w) {
         const char *name = de->d_name;
         size_t n = strlen(name);
         if (n < 7 || strcmp(name + n - 6, ".chain") != 0) continue;
+        /* dirent_t::d_name can be up to 255 bytes; precision-cap so
+         * gcc -Werror=format-truncation is happy. "chain/" is 6 chars,
+         * +null = 7, leaving 73 for the filename. */
         char path[80];
-        snprintf(path, sizeof(path), "chain/%s", name);
+        snprintf(path, sizeof(path), "chain/%.73s", name);
         FILE *f = fopen(path, "rb");
         if (!f) continue;
         while (collected < SCRATCH_CAP &&
