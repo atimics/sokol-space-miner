@@ -816,6 +816,10 @@ static void init(void) {
     reset_world();
     onboarding_load();
     mining_client_init();
+    /* Bind to whatever session token the local server seeded — the
+     * multiplayer connect path will rebind to the real one once the
+     * WS handshake completes. */
+    mining_client_set_session_token(g.world.players[g.local_player_slot].session_token);
 
     /* --- Multiplayer: auto-connect if server URL is available --- */
     {

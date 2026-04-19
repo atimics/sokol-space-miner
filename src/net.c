@@ -5,6 +5,7 @@
  * Native build: Uses mongoose WebSocket client.
  */
 #include "net.h"
+#include "mining_client.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -110,6 +111,10 @@ static void ensure_session_token(void) {
     }
 #endif
     net_state.session_token_ready = true;
+}
+
+const uint8_t* net_local_session_token(void) {
+    return net_state.session_token_ready ? net_state.session_token : NULL;
 }
 
 static void ensure_callsign(void) {
@@ -297,6 +302,7 @@ static void handle_message(const uint8_t* data, int len) {
                     arr[i].ore    = read_f32_le(&p[23]);
                     arr[i].radius = read_f32_le(&p[27]);
                     arr[i].smelt_progress = (float)p[31] / 255.0f;
+                    arr[i].grade = p[32];
                 }
                 net_state.callbacks.on_asteroids(arr, decoded);
             }
@@ -674,6 +680,8 @@ static EM_BOOL on_ws_open(int eventType, const EmscriptenWebSocketOpenEvent* eve
     ensure_session_token();
     ensure_callsign();
     send_session_token();
+    /* Rebind the mining identity to the real (server-known) token. */
+    mining_client_set_session_token(net_state.session_token);
     return EM_TRUE;
 }
 
@@ -852,6 +860,7 @@ static void net_ev_handler(struct mg_connection *c, int ev, void *ev_data) {
         ensure_session_token();
         ensure_callsign();
         send_session_token();
+        mining_client_set_session_token(net_state.session_token);
     } else if (ev == MG_EV_WS_MSG) {
         struct mg_ws_message *wm = (struct mg_ws_message *)ev_data;
         handle_message((const uint8_t *)wm->data.buf, (int)wm->data.len);

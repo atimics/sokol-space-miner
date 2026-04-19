@@ -147,35 +147,17 @@ void sim_step_station_production(world_t *w, float dt) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Grade roll at smelt time (RATi IS the ore)                          */
+/* Grade roll on tractor (RATi IS the ore — players sign at tow)       */
 /* ------------------------------------------------------------------ */
 
-/* Run MINING_CANDIDATES_PER_TON × ore_tons candidates through the
- * SHA-based PRF and return the best grade among them. Seeded from
- * the current asteroid + ship state so it's deterministic (any
- * observer with the same inputs reproduces the roll) without needing
- * the long-gone parent state. Phase 1 is trust-on-first-sell; this
- * is server-authoritative and the client takes the reported grade. */
-static mining_grade_t roll_smelt_grade(const world_t *w,
-                                        const asteroid_t *a,
-                                        const server_player_t *tower) {
-    mining_fracture_inputs_t inputs;
-    memset(&inputs, 0, sizeof(inputs));
-    inputs.asteroid_pos_x_q    = mining_q100_(a->pos.x);
-    inputs.asteroid_pos_y_q    = mining_q100_(a->pos.y);
-    inputs.asteroid_rotation_q = mining_q1000_(a->rotation);
-    inputs.ship_pos_x_q        = mining_q100_(tower->ship.pos.x);
-    inputs.ship_pos_y_q        = mining_q100_(tower->ship.pos.y);
-    inputs.ship_angle_q        = mining_q1000_(tower->ship.angle);
-    inputs.outward_dir_q       = mining_q1000_(tower->ship.angle);
-    inputs.world_time_ms       = (uint64_t)(w->time * 1000.0);
-    inputs.fractured_by        = (uint8_t)tower->id;
-
-    uint8_t seed[32];
-    mining_fracture_seed_compute(&inputs, seed);
-
-    /* Use sha256(session_token) as the player pubkey — 32-byte input
-     * the PRF expects. Session token is the stable server-side identity. */
+/* Roll the capped burst against the fragment's stamped fracture_seed
+ * keyed on the tower's session identity. Each ownership transition
+ * runs this fresh, so theft starts a new roll with the thief's key —
+ * the original owner's lucky stash doesn't transfer. Budget is
+ * MINING_CANDIDATES_PER_TON × ore_tons, fixed at fracture; tow time
+ * never multiplies it. */
+mining_grade_t sim_roll_fragment_grade(const asteroid_t *a,
+                                       const server_player_t *tower) {
     uint8_t player_key[32];
     sha256_bytes(tower->session_token, 8, player_key);
 
@@ -186,7 +168,7 @@ static mining_grade_t roll_smelt_grade(const world_t *w,
     mining_grade_t best = MINING_GRADE_COMMON;
     for (int i = 0; i < burst; i++) {
         mining_keypair_t kp;
-        mining_keypair_derive(seed, player_key, (uint32_t)i, &kp);
+        mining_keypair_derive(a->fracture_seed, player_key, (uint32_t)i, &kp);
         char callsign[8];
         mining_callsign_from_pubkey(kp.pub, callsign);
         mining_grade_t g = mining_classify_base58(callsign);
@@ -313,43 +295,29 @@ void step_furnace_smelting(world_t *w, float dt) {
                              && w->players[a->last_fractured_by].connected)
                             ? a->last_fractured_by : -1;
 
-            /* Smelting credits. The tractor work is the main effort —
-             * fracturing is cheap once, towing is the repeated grind —
-             * so the tower takes the full ore value, with the fracturer
-             * getting a 25% finder's fee when they're a different
-             * player. If no one tractored (fragment drifted into the
-             * furnace on its own), the fracturer collects half.
-             *
-             * RATi grade roll applies a multiplier on top of ore_value.
-             * Grade is rolled once per smelt using the tower's session
-             * identity (no tower → fracturer stands in). */
-            mining_grade_t grade = MINING_GRADE_COMMON;
-            float bonus_mult = 1.0f;
-            int roller = (tower >= 0) ? tower : fracturer;
-            if (ore_value > 0.0f && roller >= 0) {
-                grade = roll_smelt_grade(w, a, &w->players[roller]);
-                bonus_mult = mining_payout_multiplier(grade);
-            }
+            /* Grade was stamped on the asteroid the moment the current
+             * tower grabbed it (sim_roll_fragment_grade). Smelt just
+             * publishes that grade — no fresh dice. */
+            mining_grade_t grade = (mining_grade_t)a->grade;
+            float bonus_mult = mining_payout_multiplier(grade);
             float graded_value = ore_value * bonus_mult;
             int base_cr  = (int)lroundf(ore_value);
             int bonus_cr = (int)lroundf(graded_value - ore_value);
+            int roller = (tower >= 0) ? tower : fracturer;
 
             /* Announce rare strikes on the station signal channel so
              * other players see them flicker across the Network tab. */
             if (grade >= MINING_GRADE_RATI && roller >= 0) {
-                const ship_t *sh = &w->players[roller].ship;
                 char msg[96];
-                /* Derive the roller's callsign for the broadcast. */
                 uint8_t pk[32];
                 sha256_bytes(w->players[roller].session_token, 8, pk);
                 char cs[8];
                 mining_callsign_from_pubkey(pk, cs);
-                (void)sh;
                 if (grade == MINING_GRADE_COMMISSIONED)
-                    snprintf(msg, sizeof(msg), "%s struck commissioned ore  +%d",
+                    snprintf(msg, sizeof(msg), "%s published commissioned ore  +%d",
                              cs, bonus_cr);
                 else
-                    snprintf(msg, sizeof(msg), "%s pulled RATi ore  +%d",
+                    snprintf(msg, sizeof(msg), "%s published RATi ore  +%d",
                              cs, bonus_cr);
                 signal_channel_post(w, smelt_station, msg, "");
             }

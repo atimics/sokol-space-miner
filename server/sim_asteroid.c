@@ -5,6 +5,7 @@
 #include "sim_asteroid.h"
 #include "chunk.h"
 #include "rng.h"
+#include "mining.h"  /* fracture_seed_compute */
 
 /* ------------------------------------------------------------------ */
 /* RNG wrappers — use underlying randf() with &w->rng                  */
@@ -245,6 +246,23 @@ void fracture_asteroid(world_t *w, int idx, vec2 outward_dir, int8_t fractured_b
         child->pos = cpos;
         child->vel = cvel;
         child->last_fractured_by = fractured_by;
+        child->last_towed_by = -1;
+        child->grade = 0;
+
+        /* Stamp the fracture_seed on each child. Deterministic from
+         * the child's birth state — every observer reproduces it and
+         * the grade roll on tractor is verifiable. */
+        mining_fracture_inputs_t mi;
+        memset(&mi, 0, sizeof(mi));
+        mi.asteroid_id         = (uint16_t)child_slots[i];
+        mi.asteroid_pos_x_q    = mining_q100_(child->pos.x);
+        mi.asteroid_pos_y_q    = mining_q100_(child->pos.y);
+        mi.asteroid_rotation_q = mining_q1000_(child->rotation);
+        mi.ship_pos_x_q        = mining_q100_(parent.pos.x);
+        mi.ship_pos_y_q        = mining_q100_(parent.pos.y);
+        mi.world_time_ms       = (uint64_t)(w->time * 1000.0);
+        mi.fractured_by        = (uint8_t)fractured_by;
+        mining_fracture_seed_compute(&mi, child->fracture_seed);
     }
 
     /* audio_play_fracture removed */

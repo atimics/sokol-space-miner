@@ -307,6 +307,12 @@ typedef struct {
     int8_t last_fractured_by;  /* player ID who fractured the parent, -1 = none */
     float smelt_progress;      /* 0.0-1.0: how far through smelting (in furnace beam) */
     bool net_dirty;   /* needs network sync (spawn, fracture, HP change, death) */
+    /* RATi mining: fracture_seed is set once when the fragment is born
+     * and stays constant; grade is rolled fresh every time last_towed_by
+     * changes, keyed on (fracture_seed, new tower's session identity).
+     * Published on the chain at smelt time. */
+    uint8_t fracture_seed[32];
+    uint8_t grade;             /* mining_grade_t, 0 = common */
 } asteroid_t;
 
 typedef enum {

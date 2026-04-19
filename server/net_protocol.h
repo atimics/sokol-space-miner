@@ -194,6 +194,7 @@ static inline int serialize_asteroids_for_player(
                 if (sp_f > 1.0f) sp_f = 1.0f;
                 p[31] = (uint8_t)(sp_f * 255.0f);
             }
+            p[32] = a->grade;
             sent[i] = true;
             count++;
         } else if (sent[i] && !in_view) {
@@ -239,6 +240,7 @@ static inline int serialize_asteroids_full(uint8_t *buf, const asteroid_t *aster
             if (sp_f > 1.0f) sp_f = 1.0f;
             p[31] = (uint8_t)(sp_f * 255.0f);
         }
+        p[32] = a->grade;
         count++;
     }
     buf[0] = NET_MSG_WORLD_ASTEROIDS;
@@ -315,7 +317,7 @@ _Static_assert(
     "PLAYER_RECORD_SIZE must match serialized player state layout"
 );
 _Static_assert(
-    2 + 1 + 7 * 4 + 1 == ASTEROID_RECORD_SIZE,  /* uint16 index + flags + 7 floats + smelt:u8 */
+    2 + 1 + 7 * 4 + 1 + 1 == ASTEROID_RECORD_SIZE,  /* uint16 index + flags + 7 floats + smelt:u8 + grade:u8 */
     "ASTEROID_RECORD_SIZE must match serialized asteroid layout"
 );
 _Static_assert(
