@@ -483,6 +483,10 @@ typedef struct {
         struct { float ore; int fragments; } pickup;
         struct { ship_upgrade_t upgrade; } upgrade;
         struct { float amount; } damage;
+        /* SIM_EVENT_SELL: populated when a fragment is smelted. grade
+         * is mining_grade_t; base_cr is ore * station_buy_price;
+         * bonus_cr is the extra credits the multiplier added on top. */
+        struct { int station; uint8_t grade; int base_cr; int bonus_cr; } sell;
         struct { int slot; } outpost_placed;
         struct { int station; float credits; int contract_index; } hail_response;
         struct { int slot; } outpost_activated;

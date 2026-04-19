@@ -1844,13 +1844,31 @@ static void step_mining_system(world_t *w, server_player_t *sp, float dt, bool m
 
 /* --- Economy ledger helpers --- */
 
-/* Find or create a ledger entry for a player at a station */
+/* Find or create a ledger entry for a player at a station.
+ * When the 16-slot table is full, evict the entry with the smallest
+ * lifetime_supply (the least-active contributor). Their remaining
+ * balance is returned to the station's credit_pool so the money
+ * supply stays conserved. */
 static int ledger_find_or_create(station_t *st, const uint8_t *token) {
     for (int i = 0; i < st->ledger_count; i++) {
         if (memcmp(st->ledger[i].player_token, token, 8) == 0) return i;
     }
-    if (st->ledger_count >= 16) return -1;
-    int idx = st->ledger_count++;
+    int idx;
+    if (st->ledger_count < 16) {
+        idx = st->ledger_count++;
+    } else {
+        /* Evict least-supplied. Ties resolved by lowest index. */
+        int evict = 0;
+        float worst = st->ledger[0].lifetime_supply;
+        for (int i = 1; i < 16; i++) {
+            if (st->ledger[i].lifetime_supply < worst) {
+                worst = st->ledger[i].lifetime_supply;
+                evict = i;
+            }
+        }
+        st->credit_pool += st->ledger[evict].balance;
+        idx = evict;
+    }
     memcpy(st->ledger[idx].player_token, token, 8);
     st->ledger[idx].balance = 0.0f;
     st->ledger[idx].lifetime_supply = 0.0f;

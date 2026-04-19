@@ -290,12 +290,6 @@ void process_sim_events(const sim_events_t *events) {
                 if (ev->player_id == g.local_player_slot)
                     onboarding_mark_fractured();
                 break;
-            case SIM_EVENT_PICKUP:
-                if (ev->player_id == g.local_player_slot) {
-                    mining_client_on_pickup(&g.world, g.local_player_slot,
-                                            ev->pickup.ore);
-                }
-                break;
             case SIM_EVENT_MINING_TICK:
                 if (ev->player_id == g.local_player_slot) {
                     audio_play_mining_tick(&g.audio);
@@ -331,6 +325,8 @@ void process_sim_events(const sim_events_t *events) {
                 if (ev->player_id == g.local_player_slot) {
                     audio_play_sale(&g.audio);
                     episode_trigger(&g.episode, 2); /* Ep 2: Furnace — first smelt */
+                    mining_client_record_strike((mining_grade_t)ev->sell.grade,
+                                                ev->sell.bonus_cr);
                 }
                 break;
             case SIM_EVENT_REPAIR:
@@ -664,7 +660,7 @@ static void sim_step(float dt) {
             vtabs[vtab_count++] = STATION_TAB_SHIPYARD;
         }
         vtabs[vtab_count++] = STATION_TAB_NETWORK;
-        vtabs[vtab_count++] = STATION_TAB_HOLDINGS;
+        vtabs[vtab_count++] = STATION_TAB_GRADES;
         int cur = 0;
         for (int i = 0; i < vtab_count; i++) { if (vtabs[i] == g.station_tab) { cur = i; break; } }
         int dir = is_key_pressed(SAPP_KEYCODE_TAB) ? 1 : (vtab_count - 1);

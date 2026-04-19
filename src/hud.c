@@ -40,6 +40,15 @@ float player_current_balance(void) {
     return client_station_balance(st);
 }
 
+/* Currency label at the player's current (docked or nearby) station.
+ * Falls back to "cr" when the station hasn't set a currency_name. */
+static const char *player_current_currency(void) {
+    int st = LOCAL_PLAYER.docked ? LOCAL_PLAYER.current_station : LOCAL_PLAYER.nearby_station;
+    if (st < 0 || st >= MAX_STATIONS) return "cr";
+    const char *cn = g.world.stations[st].currency_name;
+    return (cn && cn[0]) ? cn : "cr";
+}
+
 /* ------------------------------------------------------------------ */
 /* UI scaling / layout helpers                                         */
 /* ------------------------------------------------------------------ */
@@ -683,7 +692,7 @@ void draw_hud_panels(void) {
             visible_tabs[tab_count++] = STATION_TAB_SHIPYARD;
         }
         visible_tabs[tab_count++] = STATION_TAB_NETWORK;
-        visible_tabs[tab_count++] = STATION_TAB_HOLDINGS;
+        visible_tabs[tab_count++] = STATION_TAB_GRADES;
         float tab_w = fminf(inner_w / (float)tab_count, 96.0f);
 
         for (int t = 0; t < tab_count; t++) {
@@ -897,7 +906,10 @@ void draw_hud(void) {
             const char *mc = mining_client_get()->player_callsign;
             const char *cs = (mc && mc[0] != '\0' && mc[0] != '_') ? mc : net_local_callsign();
             const char *tag = (cs && cs[0] != '\0') ? cs : (LOCAL_PLAYER.docked ? "RUN" : "SHIP");
-            sdtx_printf("%s // CR %d", tag, credits);
+            if (LOCAL_PLAYER.docked)
+                sdtx_printf("%s // %d %s", tag, credits, player_current_currency());
+            else
+                sdtx_puts(tag);
         }
 
         sdtx_pos(top_text_x, top_row_1);
@@ -1026,7 +1038,14 @@ void draw_hud(void) {
 
     sdtx_pos(top_text_x, top_row_1);
     sdtx_color3b(PAL_TEXT_SECONDARY);
-    sdtx_printf("CR %d  H %d/%d  C %d/%d  ", credits, hull_units, hull_capacity, cargo_units, cargo_capacity);
+    if (LOCAL_PLAYER.docked) {
+        sdtx_printf("%d %s  H %d/%d  C %d/%d  ",
+                    credits, player_current_currency(),
+                    hull_units, hull_capacity, cargo_units, cargo_capacity);
+    } else {
+        sdtx_printf("H %d/%d  C %d/%d  ",
+                    hull_units, hull_capacity, cargo_units, cargo_capacity);
+    }
     sdtx_color3b(sig_r, sig_g, sig_b);
     sdtx_printf("%s %d%%", sig_band, sig_pct);
     if (sig_quality < SIGNAL_BAND_OPERATIONAL) {

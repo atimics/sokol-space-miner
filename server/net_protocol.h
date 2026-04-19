@@ -777,8 +777,14 @@ static inline int serialize_events(uint8_t *buf, const sim_events_t *events) {
             p[2] = (uint8_t)ev->scaffold_ready.station;
             p[3] = (uint8_t)ev->scaffold_ready.module_type;
             break;
+        case SIM_EVENT_SELL:
+            p[2] = (uint8_t)ev->sell.station;
+            p[3] = (uint8_t)ev->sell.grade;
+            write_u32_le(&p[4], (uint32_t)ev->sell.base_cr);
+            write_u32_le(&p[8], (uint32_t)ev->sell.bonus_cr);
+            break;
         default:
-            /* MINING_TICK, DOCK, LAUNCH, SELL, REPAIR, SIGNAL_LOST,
+            /* MINING_TICK, DOCK, LAUNCH, REPAIR, SIGNAL_LOST,
              * ORDER_REJECTED: type + player_id is sufficient */
             break;
         }

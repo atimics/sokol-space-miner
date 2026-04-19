@@ -36,19 +36,10 @@
 #define MINING_FRACTURE_SEED_BYTES 32
 #define MINING_BASE58_CAP          64   /* >= ceil(32 * 138/100) + terminator */
 
-/* Balance dial: candidates generated per ton of ore delivered.
- * An S-tier fragment carries 8-14 tons, so one tow-in ≈ 800-1400
- * candidates, and a full XXL→S cascade delivers tens of thousands.
- * Tune here if the grade-3+ strike cadence needs to shift. */
+/* Candidates per ton rolled at smelt time. An S-tier fragment carries
+ * 8-14 tons → 800-1400 rolls, and the best grade among them sets the
+ * payout multiplier. Tune here if the strike cadence needs to shift. */
 #define MINING_CANDIDATES_PER_TON  100
-
-/* Maximum keypairs a client keeps locally. Hard cap to keep
- * localStorage footprint bounded; overflow silently drops new ones. */
-#define MINING_HOLDINGS_MAX        4096
-
-/* Batch size upper bound per sell transaction. Tuned so a full batch
- * stays under a comfortable WS frame. */
-#define MINING_SELL_BATCH_MAX      1024
 
 /* ------------------------------------------------------------------ */
 /* Grade ladder                                                       */
@@ -63,15 +54,19 @@ typedef enum {
     MINING_GRADE_COUNT        = 5
 } mining_grade_t;
 
-/* Ledger value per sample, applied by the receiving station. */
-static inline int mining_payout_for_grade(mining_grade_t g) {
+/* Payout multiplier applied at the refinery on top of the ore's base
+ * price. Anchored at 1.0× for common so the baseline economy is
+ * unchanged; higher grades are bonuses over the same ore delivery.
+ * RATi IS the ore — a "strike" is a better-graded load of ore, not
+ * a separate tradable asset. */
+static inline float mining_payout_multiplier(mining_grade_t g) {
     switch (g) {
-    case MINING_GRADE_COMMON:       return 1;
-    case MINING_GRADE_FINE:         return 10;
-    case MINING_GRADE_RARE:         return 100;
-    case MINING_GRADE_RATI:         return 10000;
-    case MINING_GRADE_COMMISSIONED: return 500000;
-    default: return 0;
+    case MINING_GRADE_COMMON:       return 1.0f;
+    case MINING_GRADE_FINE:         return 1.2f;
+    case MINING_GRADE_RARE:         return 2.0f;
+    case MINING_GRADE_RATI:         return 10.0f;
+    case MINING_GRADE_COMMISSIONED: return 100.0f;
+    default: return 1.0f;
     }
 }
 
