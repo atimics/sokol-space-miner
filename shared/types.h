@@ -433,6 +433,12 @@ typedef struct {
     uint8_t  audio_len;
     char     text[SIGNAL_CHANNEL_TEXT_MAX];
     char     audio_url[SIGNAL_CHANNEL_AUDIO_MAX];
+    /* Hash chain: entry_hash = sha256(prev_entry_hash || id || timestamp_ms ||
+     * sender_station || text_len || text). Genesis block uses zeroes for the
+     * previous hash. Server-side only — populated by signal_channel_post and
+     * persisted to disk; not sent on the wire (clients trust the snapshot
+     * they get and don't reverify in V1). */
+    uint8_t  entry_hash[32];
 } signal_channel_msg_t;
 
 typedef struct {
