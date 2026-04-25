@@ -36,9 +36,11 @@ static char *enter_scratch_dir(const char *label) {
 
 static void leave_scratch_dir(char *prev) {
     if (!prev) return;
-    /* Best-effort cleanup — leftover scratch dirs in /tmp are harmless. */
-    system("rm -rf chain");
-    chdir(prev);
+    /* Best-effort cleanup — leftover scratch dirs in /tmp are harmless,
+     * so we ignore the return values explicitly to satisfy
+     * -Werror=unused-result on Linux glibc. */
+    int rc1 = system("rm -rf chain"); (void)rc1;
+    int rc2 = chdir(prev);            (void)rc2;
     free(prev);
 }
 
@@ -51,7 +53,7 @@ TEST(test_signal_chain_load_no_chain_dir_returns_silently) {
     char *prev = enter_scratch_dir("no_dir");
     if (!prev) return;
     /* Remove the dir created by enter_scratch_dir to hit the !dir branch. */
-    system("rm -rf chain");
+    int rc = system("rm -rf chain"); (void)rc;
     WORLD_DECL;
     signal_chain_load(&w);
     ASSERT_EQ_INT(w.signal_channel.count, 0);
