@@ -1,4 +1,4 @@
-.PHONY: all build build-web build-server build-test test crap dev stop deploy clean
+.PHONY: all build build-web build-server build-test test crap dev dev-logs dev-clean stop deploy clean
 
 all: build build-web build-server
 
@@ -53,25 +53,37 @@ crap:
 	python3 scripts/crap.py --coverage coverage.json \
 		--paths server src shared --json-out crap.json
 
-# --- Local dev (server on :9091, web on :8082) ---
-dev: build-server build-web
-	@echo "Starting local dev environment..."
-	@pkill -f signal_server 2>/dev/null || true
-	@pkill -f "http.server 8082" 2>/dev/null || true
-	@sleep 0.3
-	PORT=9091 ./build/signal_server &
-	python3 -m http.server 8082 --directory build-web &
-	@sleep 0.5
+# --- Local dev = docker compose (single source of truth) ---
+# One canonical local path. The container's entrypoint cd's into
+# /app/data (bind-mounted from ./data) before launching the server,
+# so all persistence stays isolated from the working tree. Same
+# binary as production (alpine static build, identical CMake flags).
+#
+# For client-only iteration (HUD, input, render — anything that
+# doesn't need a server) use the offline native build instead:
+#   make build && ./build/signal
+# That path uses the embedded singleplayer server in src/local_server.c.
+dev:
+	@mkdir -p data
+	docker compose up --build -d
 	@echo ""
+	@echo "  Web:     http://localhost:8080/signal.html?server=ws://localhost:9091/ws"
 	@echo "  Server:  ws://localhost:9091/ws"
-	@echo "  Client:  http://localhost:8082/signal.html?server=ws://localhost:9091/ws"
-	@echo ""
-	@echo "  make stop  to shut down"
+	@echo "  Logs:    make dev-logs"
+	@echo "  Stop:    make stop  (or  make dev-clean  to wipe state)"
+
+dev-logs:
+	docker compose logs -f signal
 
 stop:
-	@pkill -f signal_server 2>/dev/null || true
-	@pkill -f "http.server 8082" 2>/dev/null || true
+	docker compose down
 	@echo "Stopped."
+
+# Wipe persisted state. Removes the bind-mounted data dir entirely;
+# next 'make dev' starts from a fresh world.
+dev-clean: stop
+	rm -rf data
+	@echo "Persisted state wiped."
 
 # --- Deploy (triggers CI via push) ---
 deploy:
