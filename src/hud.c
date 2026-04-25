@@ -748,352 +748,494 @@ void draw_hud_panels(void) {
 /* draw_hud -- the main HUD text layer                                 */
 /* ------------------------------------------------------------------ */
 
-void draw_hud(void) {
-    float screen_w = ui_screen_width();
-    float screen_h = ui_screen_height();
+/* All the shared state every panel needs. Built once per frame by
+ * compute_hud_state, then passed around by const pointer. Avoids
+ * recomputing layout/readouts in each panel and keeps panel signatures
+ * uniform. */
+enum { HUD_MSG_LINES = 4, HUD_MSG_LINE_CAP = 96 };
 
-    /* --- Death screen overlay (driven by the death cinematic) --- */
-    if (g.death_cinematic.active || g.death_cinematic.menu_alpha > 0.001f) {
-        float menu_alpha = g.death_cinematic.menu_alpha;
-        if (menu_alpha < 0.0f) menu_alpha = 0.0f;
-        if (menu_alpha > 1.0f) menu_alpha = 1.0f;
-        float scrim = 0.55f * menu_alpha;
+typedef struct {
+    float screen_w, screen_h;
+    bool compact;
+    /* top-panel layout */
+    float top_text_x, top_row_0, top_row_1, top_row_2, top_row_3;
+    /* message panel layout */
+    float message_x, message_y, message_w, message_h;
+    /* readouts */
+    int hull_units, hull_capacity;
+    int cargo_units, cargo_capacity;
+    int credits;
+    int station_distance;
+    int bearing_degrees;
+    float bearing;            /* radians, used by compact L/R/A glyph */
+    const char *bearing_side; /* "ahead" / "left" / "right" */
+    /* signal */
+    float sig_quality;
+    int sig_pct;
+    const char *sig_band;
+    uint8_t sig_r, sig_g, sig_b;
+    /* station refs */
+    const station_t *current_station;
+    const station_t *navigation_station;
+    /* message panel content */
+    char message_label[32];
+    char message_text[320];
+    char message_lines[HUD_MSG_LINES][HUD_MSG_LINE_CAP];
+    uint8_t message_r, message_g, message_b;
+    /* docked UI state — only built if docked */
+    station_ui_state_t ui;
+} hud_state_t;
 
-        /* Dark scrim under the menu */
-        sgl_begin_quads();
-        sgl_c4f(0.0f, 0.0f, 0.0f, scrim);
-        sgl_v2f(0.0f, 0.0f);
-        sgl_v2f(screen_w, 0.0f);
-        sgl_v2f(screen_w, screen_h);
-        sgl_v2f(0.0f, screen_h);
-        sgl_end();
-        float alpha = menu_alpha;
+static void hud_color_signal_band(float quality, uint8_t *r, uint8_t *g, uint8_t *b) {
+    if      (quality < SIGNAL_BAND_FRONTIER)    { *r = 255; *g =  80; *b =  80; }
+    else if (quality < SIGNAL_BAND_FRINGE)      { *r = 255; *g = 180; *b =  80; }
+    else if (quality < SIGNAL_BAND_OPERATIONAL) { *r = 255; *g = 221; *b = 119; }
+    else                                        { *r = 203; *g = 220; *b = 248; }
+}
 
-        /* Use 1:1 canvas so text fills the screen */
-        sdtx_canvas(screen_w, screen_h);
-        sdtx_origin(0.0f, 0.0f);
-        float cx = screen_w * 0.5f;
-        float cy = screen_h * 0.5f;
-        float cell = 8.0f;
-        uint8_t a8 = (uint8_t)(alpha * 255.0f);
-
-        /* Title */
-        const char *title = "SHIP DESTROYED";
-        float title_w = (float)strlen(title) * cell;
-        sdtx_pos((cx - title_w * 0.5f) / cell, (cy - 60.0f) / cell);
-        sdtx_color4b(PAL_DEATH_TITLE, a8);
-        sdtx_puts(title);
-
-        /* Stats */
-        float row = (cy - 16.0f) / cell;
-        float left = fmaxf(1.0f, (cx - 110.0f) / cell);
-        sdtx_color4b(PAL_NOTICE, a8);
-
-        sdtx_pos(left, row);
-        sdtx_printf("Ore smelted:   %8.0f", g.death_ore_mined);
-        row += 2.5f;
-
-        sdtx_pos(left, row);
-        sdtx_printf("Rocks broken:  %8d", g.death_asteroids_fractured);
-        row += 2.5f;
-
-        sdtx_pos(left, row);
-        sdtx_color4b(PAL_DEATH_EARNED, a8);
-        sdtx_printf("Credits earned:%8.0f", g.death_credits_earned);
-        row += 2.5f;
-
-        sdtx_pos(left, row);
-        sdtx_color4b(PAL_DEATH_SPENT, a8);
-        sdtx_printf("Credits spent: %8.0f", g.death_credits_spent);
-        row += 3.0f;
-
-        /* Global highscores — top runs broadcast by the server. The
-         * player's just-submitted run is highlighted in the death-earned
-         * color so they can spot where they landed. Always render the
-         * header so the player knows the leaderboard exists even when
-         * empty (first run on a fresh server) or before the server's
-         * post-death broadcast has arrived. */
-        {
-            const char *lb = "-- TOP RUNS --";
-            float lb_w = (float)strlen(lb) * cell;
-            sdtx_pos((cx - lb_w * 0.5f) / cell, row);
-            sdtx_color4b(PAL_NOTICE, a8);
-            sdtx_puts(lb);
-            row += 1.6f;
-            if (g.highscore_count > 0) {
-                int show = (g.highscore_count > 8) ? 8 : g.highscore_count;
-                for (int i = 0; i < show; i++) {
-                    char cs[9];
-                    memcpy(cs, g.highscores[i].callsign, 8);
-                    cs[8] = '\0';
-                    for (int k = 7; k >= 0 && (cs[k] == ' ' || cs[k] == '\0'); k--) cs[k] = '\0';
-                    bool is_me = (g.death_credits_earned > 0.5f
-                                  && fabsf(g.highscores[i].credits_earned - g.death_credits_earned) < 0.5f);
-                    if (is_me) sdtx_color4b(PAL_DEATH_EARNED, a8);
-                    else       sdtx_color4b(PAL_TEXT_FADED,  a8);
-                    sdtx_pos(left, row);
-                    sdtx_printf("%2d. %-8s %8.0f", i + 1, cs, g.highscores[i].credits_earned);
-                    row += 1.4f;
-                }
-            } else {
-                sdtx_color4b(PAL_TEXT_FADED, a8);
-                sdtx_pos(left, row);
-                sdtx_puts("  (no records yet)");
-                row += 1.4f;
+/* Compute pending ledger credits the local player has waiting at any
+ * station (singleplayer only, and only when signal is strong enough to
+ * hail). Returns 0 in multiplayer / weak signal — the server pushes
+ * those via the hail flow. */
+static float hud_pending_ledger_credits(float sig_quality) {
+    if (!g.local_server.active || sig_quality < 0.90f) return 0.0f;
+    float pending = 0.0f;
+    for (int si = 0; si < MAX_STATIONS; si++) {
+        const station_t *st = &g.world.stations[si];
+        for (int li = 0; li < st->ledger_count; li++) {
+            if (memcmp(st->ledger[li].player_token,
+                       LOCAL_PLAYER.session_token, 8) == 0) {
+                pending += st->ledger[li].balance;
             }
-            row += 1.0f;
         }
-
-        /* Prompt — RED, hard FLASH on/off */
-        float flash = (sinf(g.world.time * 7.0f) > 0.0f) ? 1.0f : 0.25f;
-        uint8_t pa = (uint8_t)(flash * (float)a8);
-        sdtx_color4b(PAL_DEATH_PROMPT, pa);
-        const char *prompt = "[ E ] launch";
-        float prompt_w = (float)strlen(prompt) * cell;
-        sdtx_pos((cx - prompt_w * 0.5f) / cell, row);
-        sdtx_puts(prompt);
-
-        return; /* skip normal HUD */
     }
-    bool compact = ui_is_compact();
-    float top_x = 0.0f;
-    float top_y = 0.0f;
-    float top_w = 0.0f;
-    float top_h = 0.0f;
-    float bottom_x = 0.0f;
-    float bottom_y = 0.0f;
-    float bottom_w = 0.0f;
-    float bottom_h = 0.0f;
-    float message_x = 0.0f;
-    float message_y = 0.0f;
-    float message_w = 0.0f;
-    float message_h = 0.0f;
-    get_flight_hud_rects(&top_x, &top_y, &top_w, &top_h, &bottom_x, &bottom_y, &bottom_w, &bottom_h);
-    float top_text_x = ui_text_pos(top_x + 16.0f);
-    float top_row_0 = ui_text_pos(top_y + 16.0f);
-    float top_row_1 = ui_text_pos(top_y + (compact ? 24.0f : 30.0f));
-    float top_row_2 = ui_text_pos(top_y + (compact ? 32.0f : 44.0f));
-    float top_row_3 = ui_text_pos(top_y + (compact ? 40.0f : 58.0f));
-    char message_label[32] = { 0 };
-    char message_text[320] = { 0 };
-    /* Up to 4 wrapped lines for the subtitle. Long station hails land
-     * here; empty slots are skipped on render. */
-    enum { HUD_MSG_LINES = 4, HUD_MSG_LINE_CAP = 96 };
-    char message_lines[HUD_MSG_LINES][HUD_MSG_LINE_CAP] = {{0}};
-    uint8_t message_r = 164;
-    uint8_t message_g = 177;
-    uint8_t message_b = 205;
-    int hull_units = (int)lroundf(LOCAL_PLAYER.ship.hull);
-    int hull_capacity = (int)lroundf(ship_max_hull(&LOCAL_PLAYER.ship));
+    return pending;
+}
 
-    /* --- Low HP warning: pulsing red text in message area instead of vignette --- */
-    /* (hull warning state is used by build_hud_message to show HULL INTEGRITY FAILING) */
-    int cargo_units = (int)lroundf(ship_total_cargo(&LOCAL_PLAYER.ship));
-    int credits = (int)lroundf(player_current_balance());
-    int cargo_capacity = (int)lroundf(ship_cargo_capacity(&LOCAL_PLAYER.ship));
-    const station_t* current_station = current_station_ptr();
-    const station_t* navigation_station = navigation_station_ptr();
-    station_ui_state_t ui = { 0 };
-    if (LOCAL_PLAYER.docked) {
-        build_station_ui_state(&ui);
-    }
-    int station_distance = 0;
+/* Build top-panel layout + readouts + nav bearing for one frame. */
+static void compute_hud_state(hud_state_t *s) {
+    memset(s, 0, sizeof *s);
+    s->screen_w = ui_screen_width();
+    s->screen_h = ui_screen_height();
+    s->compact = ui_is_compact();
+
+    float top_x, top_y, top_w, top_h;
+    float bottom_x, bottom_y, bottom_w, bottom_h;
+    get_flight_hud_rects(&top_x, &top_y, &top_w, &top_h,
+                         &bottom_x, &bottom_y, &bottom_w, &bottom_h);
+    (void)top_w; (void)top_h; (void)bottom_x; (void)bottom_y;
+    (void)bottom_w; (void)bottom_h;
+    s->top_text_x = ui_text_pos(top_x + 16.0f);
+    s->top_row_0  = ui_text_pos(top_y + 16.0f);
+    s->top_row_1  = ui_text_pos(top_y + (s->compact ? 24.0f : 30.0f));
+    s->top_row_2  = ui_text_pos(top_y + (s->compact ? 32.0f : 44.0f));
+    s->top_row_3  = ui_text_pos(top_y + (s->compact ? 40.0f : 58.0f));
+
+    s->hull_units    = (int)lroundf(LOCAL_PLAYER.ship.hull);
+    s->hull_capacity = (int)lroundf(ship_max_hull(&LOCAL_PLAYER.ship));
+    s->cargo_units   = (int)lroundf(ship_total_cargo(&LOCAL_PLAYER.ship));
+    s->cargo_capacity = (int)lroundf(ship_cargo_capacity(&LOCAL_PLAYER.ship));
+    s->credits       = (int)lroundf(player_current_balance());
+
+    s->current_station    = current_station_ptr();
+    s->navigation_station = navigation_station_ptr();
+    if (LOCAL_PLAYER.docked) build_station_ui_state(&s->ui);
 
     vec2 forward = v2_from_angle(LOCAL_PLAYER.ship.angle);
     vec2 home = v2(0.0f, -1.0f);
-    if (navigation_station != NULL) {
-        station_distance = (int)lroundf(v2_len(v2_sub(navigation_station->pos, LOCAL_PLAYER.ship.pos)));
-        home = v2_norm(v2_sub(navigation_station->pos, LOCAL_PLAYER.ship.pos));
+    s->station_distance = 0;
+    if (s->navigation_station != NULL) {
+        s->station_distance = (int)lroundf(
+            v2_len(v2_sub(s->navigation_station->pos, LOCAL_PLAYER.ship.pos)));
+        home = v2_norm(v2_sub(s->navigation_station->pos, LOCAL_PLAYER.ship.pos));
     }
-    float bearing = atan2f(v2_cross(forward, home), v2_dot(forward, home));
-    int bearing_degrees = (int)lroundf(fabsf(bearing) * (180.0f / PI_F));
-    const char* bearing_side = "ahead";
-    if (bearing > 0.12f) {
-        bearing_side = "left";
-    } else if (bearing < -0.12f) {
-        bearing_side = "right";
-    } else {
-        bearing_degrees = 0;
-    }
+    s->bearing = atan2f(v2_cross(forward, home), v2_dot(forward, home));
+    s->bearing_degrees = (int)lroundf(fabsf(s->bearing) * (180.0f / PI_F));
+    if (s->bearing > 0.12f)       s->bearing_side = "left";
+    else if (s->bearing < -0.12f) s->bearing_side = "right";
+    else { s->bearing_side = "ahead"; s->bearing_degrees = 0; }
 
-    sdtx_canvas(screen_w / ui_text_zoom(), screen_h / ui_text_zoom());
+    s->sig_quality = signal_strength_at(&g.world, LOCAL_PLAYER.ship.pos);
+    s->sig_pct     = (int)lroundf(s->sig_quality * 100.0f);
+    s->sig_band    = signal_band_name(s->sig_quality);
+    hud_color_signal_band(s->sig_quality, &s->sig_r, &s->sig_g, &s->sig_b);
+
+    sdtx_canvas(s->screen_w / ui_text_zoom(), s->screen_h / ui_text_zoom());
     sdtx_font(0);
     sdtx_origin(0.0f, 0.0f);
     sdtx_home();
+
+    /* Default message colors — overwritten by build_hud_message on real
+     * panels but seeded here so panels that read them when no message
+     * is active still get sane values. */
+    s->message_r = 164; s->message_g = 177; s->message_b = 205;
     if (hud_should_draw_message_panel()) {
-        int message_cols = 0;
-        get_hud_message_panel_rect(&message_x, &message_y, &message_w, &message_h);
-        build_hud_message(message_label, sizeof(message_label), message_text, sizeof(message_text), &message_r, &message_g, &message_b);
-        message_cols = (int)((message_w - 28.0f) / (HUD_CELL * ui_text_zoom()));
-        /* Wrap into up to HUD_MSG_LINES word-wrapped lines. Long station
-         * hails ("Station: MOTD  (balance N cur)") fit fully now; the
-         * old 2-line splitter dropped everything past line 1. */
-        wrap_hud_message_lines(message_text, message_cols, message_lines,
-                               HUD_MSG_LINE_CAP, HUD_MSG_LINES);
+        get_hud_message_panel_rect(&s->message_x, &s->message_y,
+                                   &s->message_w, &s->message_h);
+        build_hud_message(s->message_label, sizeof(s->message_label),
+                          s->message_text, sizeof(s->message_text),
+                          &s->message_r, &s->message_g, &s->message_b);
+        int message_cols = (int)((s->message_w - 28.0f)
+                                 / (HUD_CELL * ui_text_zoom()));
+        wrap_hud_message_lines(s->message_text, message_cols,
+                               s->message_lines, HUD_MSG_LINE_CAP, HUD_MSG_LINES);
     }
+}
 
-    float sig_quality = signal_strength_at(&g.world, LOCAL_PLAYER.ship.pos);
-    int sig_pct = (int)lroundf(sig_quality * 100.0f);
-    const char* sig_band = signal_band_name(sig_quality);
-    uint8_t sig_r, sig_g, sig_b;
-    if (sig_quality < SIGNAL_BAND_FRONTIER)         { sig_r = 255; sig_g = 80;  sig_b = 80;  }
-    else if (sig_quality < SIGNAL_BAND_FRINGE)      { sig_r = 255; sig_g = 180; sig_b = 80;  }
-    else if (sig_quality < SIGNAL_BAND_OPERATIONAL) { sig_r = 255; sig_g = 221; sig_b = 119; }
-    else                                            { sig_r = 203; sig_g = 220; sig_b = 248; }
+/* ---------- panels ---------- */
 
-    if (compact) {
-        const char* nav_role = navigation_station != NULL ? station_role_short_name(navigation_station) : "STN";
-        const char* dock_role = current_station != NULL ? station_role_short_name(current_station) : "STN";
-        const char* bearing_mark = "A";
-        if (bearing > 0.12f) {
-            bearing_mark = "L";
-        } else if (bearing < -0.12f) {
-            bearing_mark = "R";
-        }
+static void draw_death_stats(float left_col, float row, uint8_t a8) {
+    sdtx_pos(left_col, row);
+    sdtx_color4b(PAL_NOTICE, a8);
+    sdtx_printf("Ore smelted:   %8.0f", g.death_ore_mined);
+    sdtx_pos(left_col, row + 2.5f);
+    sdtx_printf("Rocks broken:  %8d", g.death_asteroids_fractured);
+    sdtx_pos(left_col, row + 5.0f);
+    sdtx_color4b(PAL_DEATH_EARNED, a8);
+    sdtx_printf("Credits earned:%8.0f", g.death_credits_earned);
+    sdtx_pos(left_col, row + 7.5f);
+    sdtx_color4b(PAL_DEATH_SPENT, a8);
+    sdtx_printf("Credits spent: %8.0f", g.death_credits_spent);
+}
 
-        sdtx_pos(top_text_x, top_row_0);
-        sdtx_color3b(PAL_TEXT_PRIMARY);
-        {
-            const char *mc = mining_client_get()->player_callsign;
-            const char *cs = (mc && mc[0] != '\0' && mc[0] != '_') ? mc : net_local_callsign();
-            const char *tag = (cs && cs[0] != '\0') ? cs : (LOCAL_PLAYER.docked ? "RUN" : "SHIP");
-            if (LOCAL_PLAYER.docked)
-                sdtx_printf("%s // %d %s", tag, credits, player_current_currency());
-            else
-                sdtx_puts(tag);
-        }
-
-        sdtx_pos(top_text_x, top_row_1);
-        sdtx_color3b(PAL_TEXT_SECONDARY);
-        sdtx_printf("H %d/%d  C %d/%d  ", hull_units, hull_capacity, cargo_units, cargo_capacity);
-        sdtx_color3b(sig_r, sig_g, sig_b);
-        sdtx_printf("%s %d%%", sig_band, sig_pct);
-        if (sig_quality < SIGNAL_BAND_OPERATIONAL) {
-            int mine_pct = (int)lroundf(signal_mining_efficiency(sig_quality) * 100.0f);
-            sdtx_printf(" M%d%%", mine_pct);
-        }
-
-        sdtx_pos(top_text_x, top_row_2);
-        if (LOCAL_PLAYER.docked) {
-            sdtx_color3b(PAL_SIGNAL_MINT);
-            sdtx_printf("%s // E launch", dock_role);
-        } else if (LOCAL_PLAYER.in_dock_range) {
-            sdtx_color3b(PAL_SIGNAL_MINT);
-            sdtx_puts("DOCK RING // E dock");
-        } else {
-            sdtx_color3b(PAL_NAV_BLUE);
-            sdtx_printf("%s %d u // %d %s", nav_role, station_distance, bearing_degrees, bearing_mark);
-        }
-
-        sdtx_pos(top_text_x, top_row_3);
-        if (LOCAL_PLAYER.docked) {
-            sdtx_color3b(PAL_ACTIVE);
-            sdtx_printf("%s CONSOLE", dock_role);
-        } else if ((LOCAL_PLAYER.hover_asteroid >= 0) && g.world.asteroids[LOCAL_PLAYER.hover_asteroid].active) {
-            const asteroid_t* asteroid = &g.world.asteroids[LOCAL_PLAYER.hover_asteroid];
-            int integrity_left = (int)lroundf(asteroid->hp);
-            sdtx_color3b(PAL_ACTIVE);
-            sdtx_printf("TGT %s // %s // %d HP", asteroid_tier_name(asteroid->tier), commodity_code(asteroid->commodity), integrity_left);
-        } else if (LOCAL_PLAYER.scan_active && LOCAL_PLAYER.scan_target_type == 1) {
-            const station_t *st = &g.world.stations[LOCAL_PLAYER.scan_target_index];
-            sdtx_color3b(PAL_SCAN_ACTIVE);
-            if (LOCAL_PLAYER.scan_module_index >= 0) {
-                const station_module_t *m = &st->modules[LOCAL_PLAYER.scan_module_index];
-                sdtx_printf("SCAN %s // %s", st->name, module_type_name(m->type));
-            } else {
-                sdtx_printf("SCAN %s // CORE", st->name);
-            }
-        } else if (LOCAL_PLAYER.scan_active && LOCAL_PLAYER.scan_target_type == 2) {
-            const npc_ship_t *npc = &g.world.npc_ships[LOCAL_PLAYER.scan_target_index];
-            sdtx_color3b(PAL_SCAN_ACTIVE);
-            sdtx_printf("SCAN NPC // %s", npc->role == NPC_ROLE_MINER ? "MINER" : "HAULER");
-        } else if (LOCAL_PLAYER.scan_active && LOCAL_PLAYER.scan_target_type == 3) {
-            sdtx_color3b(PAL_SCAN_ACTIVE);
-            sdtx_printf("SCAN PILOT // ID %d", LOCAL_PLAYER.scan_target_index);
-        } else if (mining_client_get()->fracture_search_timer > 0.0f) {
-            sdtx_color3b(PAL_ACTIVE);
-            sdtx_puts("MINING... // CLAIM WINDOW");
-        } else if (LOCAL_PLAYER.ship.towed_count > 0) {
-            sdtx_color3b(PAL_ACTIVE);
-            if (LOCAL_PLAYER.ship.tractor_active) {
-                sdtx_printf("TOWING %d // TRACTOR", LOCAL_PLAYER.ship.towed_count);
-            } else {
-                sdtx_printf("TOWING %d // tap [Space] release", LOCAL_PLAYER.ship.towed_count);
-            }
-        } else if (LOCAL_PLAYER.nearby_fragments > 0) {
-            if (LOCAL_PLAYER.ship.tractor_active) {
-                sdtx_color3b(PAL_ACTIVE);
-                if (LOCAL_PLAYER.tractor_fragments > 0) {
-                    sdtx_printf("TRACTOR // %d FRAG", LOCAL_PLAYER.tractor_fragments);
-                } else {
-                    sdtx_printf("hold [Space] TRACTOR // %d", LOCAL_PLAYER.nearby_fragments);
-                }
-            } else {
-                sdtx_color3b(PAL_TRACTOR_OFF);
-                sdtx_printf("hold [Space] TRACTOR // %d nearby", LOCAL_PLAYER.nearby_fragments);
-            }
-        } else if (cargo_units >= cargo_capacity) {
-            sdtx_color3b(PAL_ORE_AMBER);
-            sdtx_puts("Hold full. Dock to sell.");
-        } else {
-            /* Check for pending credits from ledger (singleplayer) */
-            float pending = 0.0f;
-            if (g.local_server.active && sig_quality >= 0.90f) {
-                for (int si = 0; si < MAX_STATIONS; si++) {
-                    const station_t *st = &g.world.stations[si];
-                    for (int li = 0; li < st->ledger_count; li++) {
-                        if (memcmp(st->ledger[li].player_token,
-                                   LOCAL_PLAYER.session_token, 8) == 0) {
-                            pending += st->ledger[li].balance;
-                        }
-                    }
-                }
-            }
-            if (pending > 0.5f) {
-                sdtx_color3b(PAL_ORE_AMBER);
-                sdtx_printf("[H] collect %d", (int)lroundf(pending));
-            } else {
-                sdtx_color3b(PAL_TEXT_MUTED);
-                sdtx_puts("Nothing in range. Scan for rocks.");
-            }
-        }
-
-        if (hud_should_draw_message_panel()) {
-            /* Subtitle: up to HUD_MSG_LINES wrapped lines, stacked bottom-up. */
-            float cell = HUD_CELL * ui_text_zoom();
-            int first_line_with_content = -1;
-            int last_line_with_content = -1;
-            for (int li = 0; li < HUD_MSG_LINES; li++) {
-                if (message_lines[li][0] != '\0') {
-                    if (first_line_with_content < 0) first_line_with_content = li;
-                    last_line_with_content = li;
-                }
-            }
-            int count = (last_line_with_content >= first_line_with_content)
-                        ? (last_line_with_content - first_line_with_content + 1) : 0;
-            for (int vi = 0; vi < count; vi++) {
-                int li = first_line_with_content + vi;
-                char full_msg[256];
-                if (vi == 0 && message_label[0] != '\0')
-                    snprintf(full_msg, sizeof(full_msg), "%s: %s",
-                             message_label, message_lines[li]);
-                else
-                    snprintf(full_msg, sizeof(full_msg), "%s", message_lines[li]);
-                float msg_w = (float)strlen(full_msg) * cell;
-                float msg_x = (screen_w * 0.5f - msg_w * 0.5f) / cell;
-                /* Stack upward so the newest line sits at the panel bottom. */
-                float msg_y = (screen_h - 32.0f - (float)(count - 1 - vi) * cell * 1.25f) / cell;
-                sdtx_pos(msg_x, msg_y);
-                sdtx_color3b(message_r, message_g, message_b);
-                sdtx_puts(full_msg);
-            }
-        }
-
-        draw_station_services(&ui);
+/* Global highscores — top runs broadcast by the server. The player's
+ * just-submitted run is highlighted in the death-earned color so they
+ * can spot where they landed. Always render the header so the player
+ * knows the leaderboard exists even when empty (first run on a fresh
+ * server) or before the post-death broadcast has arrived. */
+static void draw_death_leaderboard(float cx, float left_col, float row,
+                                   float cell, uint8_t a8) {
+    const char *lb = "-- TOP RUNS --";
+    float lb_w = (float)strlen(lb) * cell;
+    sdtx_pos((cx - lb_w * 0.5f) / cell, row);
+    sdtx_color4b(PAL_NOTICE, a8);
+    sdtx_puts(lb);
+    if (g.highscore_count == 0) {
+        sdtx_color4b(PAL_TEXT_FADED, a8);
+        sdtx_pos(left_col, row + 1.6f);
+        sdtx_puts("  (no records yet)");
         return;
     }
+    int show = (g.highscore_count > 8) ? 8 : g.highscore_count;
+    for (int i = 0; i < show; i++) {
+        char cs[9];
+        memcpy(cs, g.highscores[i].callsign, 8);
+        cs[8] = '\0';
+        for (int k = 7; k >= 0 && (cs[k] == ' ' || cs[k] == '\0'); k--) cs[k] = '\0';
+        bool is_me = (g.death_credits_earned > 0.5f
+                      && fabsf(g.highscores[i].credits_earned - g.death_credits_earned) < 0.5f);
+        sdtx_color4b(is_me ? PAL_DEATH_EARNED : PAL_TEXT_FADED, a8);
+        sdtx_pos(left_col, row + 1.6f + (float)i * 1.4f);
+        sdtx_printf("%2d. %-8s %8.0f", i + 1, cs, g.highscores[i].credits_earned);
+    }
+}
 
-    sdtx_pos(top_text_x, top_row_0);
+/* Returns true if the death cinematic claimed the frame — caller must
+ * skip the rest of draw_hud. */
+static bool draw_death_screen_if_active(const hud_state_t *s) {
+    if (!g.death_cinematic.active && g.death_cinematic.menu_alpha <= 0.001f)
+        return false;
+
+    float menu_alpha = g.death_cinematic.menu_alpha;
+    if (menu_alpha < 0.0f) menu_alpha = 0.0f;
+    if (menu_alpha > 1.0f) menu_alpha = 1.0f;
+    float scrim = 0.55f * menu_alpha;
+
+    sgl_begin_quads();
+    sgl_c4f(0.0f, 0.0f, 0.0f, scrim);
+    sgl_v2f(0.0f, 0.0f);
+    sgl_v2f(s->screen_w, 0.0f);
+    sgl_v2f(s->screen_w, s->screen_h);
+    sgl_v2f(0.0f, s->screen_h);
+    sgl_end();
+
+    sdtx_canvas(s->screen_w, s->screen_h);
+    sdtx_origin(0.0f, 0.0f);
+    float cx = s->screen_w * 0.5f;
+    float cy = s->screen_h * 0.5f;
+    float cell = 8.0f;
+    uint8_t a8 = (uint8_t)(menu_alpha * 255.0f);
+
+    const char *title = "SHIP DESTROYED";
+    float title_w = (float)strlen(title) * cell;
+    sdtx_pos((cx - title_w * 0.5f) / cell, (cy - 60.0f) / cell);
+    sdtx_color4b(PAL_DEATH_TITLE, a8);
+    sdtx_puts(title);
+
+    float row = (cy - 16.0f) / cell;
+    float left_col = fmaxf(1.0f, (cx - 110.0f) / cell);
+    draw_death_stats(left_col, row, a8);
+
+    float lb_row = row + 10.5f;
+    draw_death_leaderboard(cx, left_col, lb_row, cell, a8);
+
+    /* Prompt — RED, hard FLASH on/off */
+    int show = (g.highscore_count > 8) ? 8 : g.highscore_count;
+    if (g.highscore_count == 0) show = 0;
+    float prompt_row = lb_row + 1.6f + (float)(show > 0 ? show : 1) * 1.4f + 1.0f;
+    float flash = (sinf(g.world.time * 7.0f) > 0.0f) ? 1.0f : 0.25f;
+    sdtx_color4b(PAL_DEATH_PROMPT, (uint8_t)(flash * (float)a8));
+    const char *prompt = "[ E ] launch";
+    float prompt_w = (float)strlen(prompt) * cell;
+    sdtx_pos((cx - prompt_w * 0.5f) / cell, prompt_row);
+    sdtx_puts(prompt);
+    return true;
+}
+
+/* The third row in the top panel cycles through different states based
+ * on what the player is doing. Both compact and wide variants share the
+ * same priority chain (target > scan > mining > tractor > tractor hint
+ * > full hold > pending credits > idle hint), so we centralize the
+ * detection here and the caller renders the chosen line in the
+ * style/font of its variant. */
+typedef enum {
+    HUD_ACTION_DOCKED_CONSOLE,
+    HUD_ACTION_TARGET_ASTEROID,
+    HUD_ACTION_SCAN_STATION,
+    HUD_ACTION_SCAN_NPC,
+    HUD_ACTION_SCAN_PILOT,
+    HUD_ACTION_MINING,
+    HUD_ACTION_TOWING,
+    HUD_ACTION_TRACTOR,
+    HUD_ACTION_HOLD_FULL,
+    HUD_ACTION_PENDING_CREDITS,
+    HUD_ACTION_IDLE,
+} hud_action_t;
+
+static hud_action_t hud_classify_action(int cargo_units, int cargo_capacity,
+                                        float sig_quality, float *out_pending) {
+    *out_pending = 0.0f;
+    if (LOCAL_PLAYER.docked) return HUD_ACTION_DOCKED_CONSOLE;
+    if (LOCAL_PLAYER.hover_asteroid >= 0
+        && g.world.asteroids[LOCAL_PLAYER.hover_asteroid].active)
+        return HUD_ACTION_TARGET_ASTEROID;
+    if (LOCAL_PLAYER.scan_active) {
+        if (LOCAL_PLAYER.scan_target_type == 1) return HUD_ACTION_SCAN_STATION;
+        if (LOCAL_PLAYER.scan_target_type == 2) return HUD_ACTION_SCAN_NPC;
+        if (LOCAL_PLAYER.scan_target_type == 3) return HUD_ACTION_SCAN_PILOT;
+    }
+    if (mining_client_get()->fracture_search_timer > 0.0f) return HUD_ACTION_MINING;
+    if (LOCAL_PLAYER.ship.towed_count > 0) return HUD_ACTION_TOWING;
+    if (LOCAL_PLAYER.nearby_fragments > 0) return HUD_ACTION_TRACTOR;
+    if (cargo_units >= cargo_capacity) return HUD_ACTION_HOLD_FULL;
+    *out_pending = hud_pending_ledger_credits(sig_quality);
+    if (*out_pending > 0.5f) return HUD_ACTION_PENDING_CREDITS;
+    return HUD_ACTION_IDLE;
+}
+
+static void draw_compact_action_row(const hud_state_t *s, const char *dock_role) {
+    float pending = 0.0f;
+    hud_action_t a = hud_classify_action(s->cargo_units, s->cargo_capacity,
+                                         s->sig_quality, &pending);
+    sdtx_pos(s->top_text_x, s->top_row_3);
+    switch (a) {
+    case HUD_ACTION_DOCKED_CONSOLE:
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_printf("%s CONSOLE", dock_role);
+        break;
+    case HUD_ACTION_TARGET_ASTEROID: {
+        const asteroid_t* asteroid = &g.world.asteroids[LOCAL_PLAYER.hover_asteroid];
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_printf("TGT %s // %s // %d HP",
+            asteroid_tier_name(asteroid->tier),
+            commodity_code(asteroid->commodity),
+            (int)lroundf(asteroid->hp));
+        break;
+    }
+    case HUD_ACTION_SCAN_STATION: {
+        const station_t *st = &g.world.stations[LOCAL_PLAYER.scan_target_index];
+        sdtx_color3b(PAL_SCAN_ACTIVE);
+        if (LOCAL_PLAYER.scan_module_index >= 0) {
+            const station_module_t *m = &st->modules[LOCAL_PLAYER.scan_module_index];
+            sdtx_printf("SCAN %s // %s", st->name, module_type_name(m->type));
+        } else {
+            sdtx_printf("SCAN %s // CORE", st->name);
+        }
+        break;
+    }
+    case HUD_ACTION_SCAN_NPC: {
+        const npc_ship_t *npc = &g.world.npc_ships[LOCAL_PLAYER.scan_target_index];
+        sdtx_color3b(PAL_SCAN_ACTIVE);
+        sdtx_printf("SCAN NPC // %s",
+            npc->role == NPC_ROLE_MINER ? "MINER" : "HAULER");
+        break;
+    }
+    case HUD_ACTION_SCAN_PILOT:
+        sdtx_color3b(PAL_SCAN_ACTIVE);
+        sdtx_printf("SCAN PILOT // ID %d", LOCAL_PLAYER.scan_target_index);
+        break;
+    case HUD_ACTION_MINING:
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_puts("MINING... // CLAIM WINDOW");
+        break;
+    case HUD_ACTION_TOWING:
+        sdtx_color3b(PAL_ACTIVE);
+        if (LOCAL_PLAYER.ship.tractor_active)
+            sdtx_printf("TOWING %d // TRACTOR", LOCAL_PLAYER.ship.towed_count);
+        else
+            sdtx_printf("TOWING %d // tap [Space] release", LOCAL_PLAYER.ship.towed_count);
+        break;
+    case HUD_ACTION_TRACTOR:
+        if (LOCAL_PLAYER.ship.tractor_active) {
+            sdtx_color3b(PAL_ACTIVE);
+            if (LOCAL_PLAYER.tractor_fragments > 0)
+                sdtx_printf("TRACTOR // %d FRAG", LOCAL_PLAYER.tractor_fragments);
+            else
+                sdtx_printf("hold [Space] TRACTOR // %d", LOCAL_PLAYER.nearby_fragments);
+        } else {
+            sdtx_color3b(PAL_TRACTOR_OFF);
+            sdtx_printf("hold [Space] TRACTOR // %d nearby", LOCAL_PLAYER.nearby_fragments);
+        }
+        break;
+    case HUD_ACTION_HOLD_FULL:
+        sdtx_color3b(PAL_ORE_AMBER);
+        sdtx_puts("Hold full. Dock to sell.");
+        break;
+    case HUD_ACTION_PENDING_CREDITS:
+        sdtx_color3b(PAL_ORE_AMBER);
+        sdtx_printf("[H] collect %d", (int)lroundf(pending));
+        break;
+    case HUD_ACTION_IDLE:
+        sdtx_color3b(PAL_TEXT_MUTED);
+        sdtx_puts("Nothing in range. Scan for rocks.");
+        break;
+    }
+}
+
+static void draw_compact_top(const hud_state_t *s) {
+    const char* nav_role = s->navigation_station != NULL
+        ? station_role_short_name(s->navigation_station) : "STN";
+    const char* dock_role = s->current_station != NULL
+        ? station_role_short_name(s->current_station) : "STN";
+    const char* bearing_mark = (s->bearing > 0.12f) ? "L"
+                              : (s->bearing < -0.12f) ? "R" : "A";
+
+    /* Row 0: callsign + balance if docked */
+    sdtx_pos(s->top_text_x, s->top_row_0);
+    sdtx_color3b(PAL_TEXT_PRIMARY);
+    {
+        const char *mc = mining_client_get()->player_callsign;
+        const char *cs = (mc && mc[0] != '\0' && mc[0] != '_') ? mc : net_local_callsign();
+        const char *tag = (cs && cs[0] != '\0') ? cs
+                         : (LOCAL_PLAYER.docked ? "RUN" : "SHIP");
+        if (LOCAL_PLAYER.docked)
+            sdtx_printf("%s // %d %s", tag, s->credits, player_current_currency());
+        else
+            sdtx_puts(tag);
+    }
+
+    /* Row 1: H/C/signal */
+    sdtx_pos(s->top_text_x, s->top_row_1);
+    sdtx_color3b(PAL_TEXT_SECONDARY);
+    sdtx_printf("H %d/%d  C %d/%d  ",
+        s->hull_units, s->hull_capacity, s->cargo_units, s->cargo_capacity);
+    sdtx_color3b(s->sig_r, s->sig_g, s->sig_b);
+    sdtx_printf("%s %d%%", s->sig_band, s->sig_pct);
+    if (s->sig_quality < SIGNAL_BAND_OPERATIONAL) {
+        int mine_pct = (int)lroundf(signal_mining_efficiency(s->sig_quality) * 100.0f);
+        sdtx_printf(" M%d%%", mine_pct);
+    }
+
+    /* Row 2: dock/nav status */
+    sdtx_pos(s->top_text_x, s->top_row_2);
+    if (LOCAL_PLAYER.docked) {
+        sdtx_color3b(PAL_SIGNAL_MINT);
+        sdtx_printf("%s // E launch", dock_role);
+    } else if (LOCAL_PLAYER.in_dock_range) {
+        sdtx_color3b(PAL_SIGNAL_MINT);
+        sdtx_puts("DOCK RING // E dock");
+    } else {
+        sdtx_color3b(PAL_NAV_BLUE);
+        sdtx_printf("%s %d u // %d %s",
+            nav_role, s->station_distance, s->bearing_degrees, bearing_mark);
+    }
+
+    /* Row 3: action context */
+    draw_compact_action_row(s, dock_role);
+}
+
+static void draw_wide_action_row(const hud_state_t *s) {
+    float pending = 0.0f;
+    hud_action_t a = hud_classify_action(s->cargo_units, s->cargo_capacity,
+                                         s->sig_quality, &pending);
+    sdtx_pos(s->top_text_x, s->top_row_3);
+    switch (a) {
+    case HUD_ACTION_DOCKED_CONSOLE:
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_printf("%s console", station_role_name(s->current_station));
+        break;
+    case HUD_ACTION_TARGET_ASTEROID: {
+        const asteroid_t* asteroid = &g.world.asteroids[LOCAL_PLAYER.hover_asteroid];
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_printf("Target %s // %s // %d hp",
+            asteroid_tier_kind(asteroid->tier),
+            commodity_short_name(asteroid->commodity),
+            (int)lroundf(asteroid->hp));
+        break;
+    }
+    case HUD_ACTION_SCAN_STATION: {
+        const station_t *st = &g.world.stations[LOCAL_PLAYER.scan_target_index];
+        sdtx_color3b(PAL_SCAN_ACTIVE);
+        if (LOCAL_PLAYER.scan_module_index >= 0) {
+            const station_module_t *m = &st->modules[LOCAL_PLAYER.scan_module_index];
+            sdtx_printf("Scan %s // %s", st->name, module_type_name(m->type));
+        } else {
+            sdtx_printf("Scan %s // core hub", st->name);
+        }
+        break;
+    }
+    case HUD_ACTION_SCAN_NPC: {
+        const npc_ship_t *npc = &g.world.npc_ships[LOCAL_PLAYER.scan_target_index];
+        int npc_cargo = 0;
+        for (int ci = 0; ci < COMMODITY_COUNT; ci++)
+            npc_cargo += (int)lroundf(npc->cargo[ci]);
+        sdtx_color3b(PAL_SCAN_ACTIVE);
+        sdtx_printf("Scan NPC %s // cargo %d",
+            npc->role == NPC_ROLE_MINER ? "miner" : "hauler", npc_cargo);
+        break;
+    }
+    case HUD_ACTION_SCAN_PILOT: {
+        const server_player_t *other = &g.world.players[LOCAL_PLAYER.scan_target_index];
+        sdtx_color3b(PAL_SCAN_ACTIVE);
+        sdtx_printf("Scan pilot %d // hull %d",
+            LOCAL_PLAYER.scan_target_index, (int)lroundf(other->ship.hull));
+        break;
+    }
+    case HUD_ACTION_MINING:
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_puts("Mining... // claim window");
+        break;
+    case HUD_ACTION_TOWING:
+        /* Wide HUD doesn't call out towing separately — fall through to
+         * the tractor visual (matches old behavior). */
+        /* fallthrough */
+    case HUD_ACTION_TRACTOR:
+        sdtx_color3b(PAL_ACTIVE);
+        if (LOCAL_PLAYER.tractor_fragments > 0)
+            sdtx_printf("Tractor lock // %d frag%s",
+                LOCAL_PLAYER.tractor_fragments,
+                LOCAL_PLAYER.tractor_fragments == 1 ? "" : "s");
+        else
+            sdtx_printf("Nearby fragments // %d", LOCAL_PLAYER.nearby_fragments);
+        break;
+    case HUD_ACTION_HOLD_FULL:
+        sdtx_color3b(PAL_ORE_AMBER);
+        sdtx_puts("Hold full. Dock to sell.");
+        break;
+    case HUD_ACTION_PENDING_CREDITS:
+        sdtx_color3b(PAL_ORE_AMBER);
+        sdtx_printf("H to hail // collect %d cr", (int)lroundf(pending));
+        break;
+    case HUD_ACTION_IDLE:
+        sdtx_color3b(PAL_TEXT_MUTED);
+        sdtx_puts("No target // line up a rock");
+        break;
+    }
+}
+
+static void draw_wide_top(const hud_state_t *s) {
+    /* Row 0: callsign + flight/docked tag */
+    sdtx_pos(s->top_text_x, s->top_row_0);
     sdtx_color3b(PAL_TEXT_PRIMARY);
     {
         const char *mc = mining_client_get()->player_callsign;
@@ -1105,421 +1247,407 @@ void draw_hud(void) {
             sdtx_puts(fallback);
     }
 
-    sdtx_pos(top_text_x, top_row_1);
+    /* Row 1: balance/H/C + signal */
+    sdtx_pos(s->top_text_x, s->top_row_1);
     sdtx_color3b(PAL_TEXT_SECONDARY);
     if (LOCAL_PLAYER.docked) {
         sdtx_printf("%d %s  H %d/%d  C %d/%d  ",
-                    credits, player_current_currency(),
-                    hull_units, hull_capacity, cargo_units, cargo_capacity);
+            s->credits, player_current_currency(),
+            s->hull_units, s->hull_capacity,
+            s->cargo_units, s->cargo_capacity);
     } else {
         sdtx_printf("H %d/%d  C %d/%d  ",
-                    hull_units, hull_capacity, cargo_units, cargo_capacity);
+            s->hull_units, s->hull_capacity,
+            s->cargo_units, s->cargo_capacity);
     }
-    sdtx_color3b(sig_r, sig_g, sig_b);
-    sdtx_printf("%s %d%%", sig_band, sig_pct);
-    if (sig_quality < SIGNAL_BAND_OPERATIONAL) {
-        int mine_eff = (int)lroundf(signal_mining_efficiency(sig_quality) * 100.0f);
-        int ctrl_eff = (int)lroundf(signal_control_scale(sig_quality) * 100.0f);
+    sdtx_color3b(s->sig_r, s->sig_g, s->sig_b);
+    sdtx_printf("%s %d%%", s->sig_band, s->sig_pct);
+    if (s->sig_quality < SIGNAL_BAND_OPERATIONAL) {
+        int mine_eff = (int)lroundf(signal_mining_efficiency(s->sig_quality) * 100.0f);
+        int ctrl_eff = (int)lroundf(signal_control_scale(s->sig_quality) * 100.0f);
         sdtx_printf("  MINE %d%% CTRL %d%%", mine_eff, ctrl_eff);
     }
 
-    sdtx_pos(top_text_x, top_row_2);
-    if (LOCAL_PLAYER.docked && current_station) {
+    /* Row 2: dock/nav status */
+    sdtx_pos(s->top_text_x, s->top_row_2);
+    if (LOCAL_PLAYER.docked && s->current_station) {
         sdtx_color3b(PAL_SIGNAL_MINT);
-        sdtx_printf("%s // docked // E launch", current_station->name);
+        sdtx_printf("%s // docked // E launch", s->current_station->name);
     } else if (LOCAL_PLAYER.in_dock_range) {
         sdtx_color3b(PAL_SIGNAL_MINT);
         sdtx_puts("In dock range. [E] to dock.");
     } else {
         sdtx_color3b(PAL_NAV_BLUE);
         sdtx_printf("%s %d u // %d deg %s",
-            navigation_station != NULL ? navigation_station->name : "Station",
-            station_distance,
-            bearing_degrees,
-            bearing_side);
+            s->navigation_station != NULL ? s->navigation_station->name : "Station",
+            s->station_distance, s->bearing_degrees, s->bearing_side);
     }
 
-    sdtx_pos(top_text_x, top_row_3);
-    if (LOCAL_PLAYER.docked) {
-        sdtx_color3b(PAL_ACTIVE);
-        sdtx_printf("%s console", station_role_name(current_station));
-    } else if ((LOCAL_PLAYER.hover_asteroid >= 0) && g.world.asteroids[LOCAL_PLAYER.hover_asteroid].active) {
-        const asteroid_t* asteroid = &g.world.asteroids[LOCAL_PLAYER.hover_asteroid];
-        int integrity_left = (int)lroundf(asteroid->hp);
-        sdtx_color3b(PAL_ACTIVE);
-        sdtx_printf("Target %s // %s // %d hp", asteroid_tier_kind(asteroid->tier), commodity_short_name(asteroid->commodity), integrity_left);
-    } else if (LOCAL_PLAYER.scan_active && LOCAL_PLAYER.scan_target_type == 1) {
-        const station_t *st = &g.world.stations[LOCAL_PLAYER.scan_target_index];
-        sdtx_color3b(PAL_SCAN_ACTIVE);
-        if (LOCAL_PLAYER.scan_module_index >= 0) {
-            const station_module_t *m = &st->modules[LOCAL_PLAYER.scan_module_index];
-            sdtx_printf("Scan %s // %s", st->name, module_type_name(m->type));
-        } else {
-            sdtx_printf("Scan %s // core hub", st->name);
-        }
-    } else if (LOCAL_PLAYER.scan_active && LOCAL_PLAYER.scan_target_type == 2) {
-        const npc_ship_t *npc = &g.world.npc_ships[LOCAL_PLAYER.scan_target_index];
-        int npc_cargo = 0;
-        for (int ci = 0; ci < COMMODITY_COUNT; ci++)
-            npc_cargo += (int)lroundf(npc->cargo[ci]);
-        sdtx_color3b(PAL_SCAN_ACTIVE);
-        sdtx_printf("Scan NPC %s // cargo %d", npc->role == NPC_ROLE_MINER ? "miner" : "hauler", npc_cargo);
-    } else if (LOCAL_PLAYER.scan_active && LOCAL_PLAYER.scan_target_type == 3) {
-        const server_player_t *other = &g.world.players[LOCAL_PLAYER.scan_target_index];
-        int other_hull = (int)lroundf(other->ship.hull);
-        sdtx_color3b(PAL_SCAN_ACTIVE);
-        sdtx_printf("Scan pilot %d // hull %d", LOCAL_PLAYER.scan_target_index, other_hull);
-    } else if (mining_client_get()->fracture_search_timer > 0.0f) {
-        sdtx_color3b(PAL_ACTIVE);
-        sdtx_puts("Mining... // claim window");
-    } else if (LOCAL_PLAYER.nearby_fragments > 0) {
-        sdtx_color3b(PAL_ACTIVE);
-        if (LOCAL_PLAYER.tractor_fragments > 0) {
-            sdtx_printf("Tractor lock // %d frag%s", LOCAL_PLAYER.tractor_fragments, LOCAL_PLAYER.tractor_fragments == 1 ? "" : "s");
-        } else {
-            sdtx_printf("Nearby fragments // %d", LOCAL_PLAYER.nearby_fragments);
-        }
-    } else if (cargo_units >= cargo_capacity) {
-        sdtx_color3b(PAL_ORE_AMBER);
-        sdtx_puts("Hold full. Dock to sell.");
-    } else {
-        /* Check for pending credits from ledger (singleplayer) */
-        float pending_n = 0.0f;
-        if (g.local_server.active && sig_quality >= 0.90f) {
-            for (int si = 0; si < MAX_STATIONS; si++) {
-                const station_t *st = &g.world.stations[si];
-                for (int li = 0; li < st->ledger_count; li++) {
-                    if (memcmp(st->ledger[li].player_token,
-                               LOCAL_PLAYER.session_token, 8) == 0) {
-                        pending_n += st->ledger[li].balance;
-                    }
-                }
-            }
-        }
-        if (pending_n > 0.5f) {
-            sdtx_color3b(PAL_ORE_AMBER);
-            sdtx_printf("H to hail // collect %d cr", (int)lroundf(pending_n));
-        } else {
-            sdtx_color3b(PAL_TEXT_MUTED);
-            sdtx_puts("No target // line up a rock");
-        }
-    }
-
-    /* Subtitle: one clean line, centered at bottom-center.
-     *
-     * Sell-batch summary takes priority when it has content — the line is
-     * rendered as colored segments (total in white/gold, each grade label
-     * in its canonical color) so the player can see at a glance which
-     * grades just paid out. See shared/mining.h:mining_grade_rgb for the
-     * palette. Falls through to the regular message otherwise. */
-    bool sell_batch_has_content = false;
-    if (g.sell_batch.active || g.sell_batch.display_timer > 0.0f) {
-        for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
-            if (g.sell_batch.grade_counts[gi] > 0) { sell_batch_has_content = true; break; }
-        }
-    }
-
-    if (sell_batch_has_content) {
-        const float cell = 8.0f;
-        /* Pre-measure the composed line so we can center it. Same layout as
-         * the text form flush_sell_batch used to emit:
-         *   "[ +$N  [contract]  common xA  fine xB  ... ]" */
-        char head[32], tail[160];
-        int head_len = snprintf(head, sizeof(head), "[ +$%d", g.sell_batch.total_cr);
-        int tail_off = 0;
-        if (g.sell_batch.any_by_contract)
-            tail_off += snprintf(tail + tail_off, sizeof(tail) - tail_off, "  contract");
-        for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
-            int n = g.sell_batch.grade_counts[gi];
-            if (n <= 0) continue;
-            tail_off += snprintf(tail + tail_off, sizeof(tail) - tail_off,
-                                 "  %s x%d", mining_grade_label((mining_grade_t)gi), n);
-            if (tail_off >= (int)sizeof(tail) - 8) break;
-        }
-        int total_cols = head_len + tail_off + 2; /* " ]" */
-        float msg_w = (float)total_cols * cell;
-        float msg_x0 = screen_w * 0.5f - msg_w * 0.5f;
-        float msg_y = screen_h * 0.82f;
-
-        /* Fade during the display tail (last 1s of display_timer). */
-        float alpha = 1.0f;
-        if (!g.sell_batch.active && g.sell_batch.display_timer < 1.0f)
-            alpha = g.sell_batch.display_timer;
-        if (alpha < 0.0f) alpha = 0.0f;
-
-        uint8_t total_r = g.sell_batch.any_by_contract ? 255 : 200;
-        uint8_t total_g = g.sell_batch.any_by_contract ? 210 : 220;
-        uint8_t total_b = g.sell_batch.any_by_contract ?  60 : 230;
-        float cur_x = msg_x0;
-
-        /* "[ +$N" */
-        sdtx_pos(cur_x / cell, msg_y / cell);
-        sdtx_color4b(total_r, total_g, total_b, (uint8_t)(alpha * 255.0f));
-        sdtx_puts(head);
-        cur_x += (float)head_len * cell;
-
-        /* "  contract" marker (fixed yellow if present) */
-        if (g.sell_batch.any_by_contract) {
-            const char *tag = "  contract";
-            sdtx_pos(cur_x / cell, msg_y / cell);
-            sdtx_color4b(255, 210, 60, (uint8_t)(alpha * 255.0f));
-            sdtx_puts(tag);
-            cur_x += (float)strlen(tag) * cell;
-        }
-
-        /* Per-grade segments, each colored by mining_grade_rgb. */
-        for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
-            int n = g.sell_batch.grade_counts[gi];
-            if (n <= 0) continue;
-            char seg[32];
-            int seg_len = snprintf(seg, sizeof(seg), "  %s x%d",
-                                   mining_grade_label((mining_grade_t)gi), n);
-            uint8_t gr, gg_, gb;
-            mining_grade_rgb((mining_grade_t)gi, &gr, &gg_, &gb);
-            sdtx_pos(cur_x / cell, msg_y / cell);
-            sdtx_color4b(gr, gg_, gb, (uint8_t)(alpha * 255.0f));
-            sdtx_puts(seg);
-            cur_x += (float)seg_len * cell;
-        }
-
-        /* " ]" closer */
-        sdtx_pos(cur_x / cell, msg_y / cell);
-        sdtx_color4b(total_r, total_g, total_b, (uint8_t)(alpha * 255.0f));
-        sdtx_puts(" ]");
-    } else if (hud_should_draw_message_panel()) {
-        float cell = 8.0f;
-        bool is_hull_warn = (message_r == 255 && message_g == 60);
-        uint8_t r8 = message_r, g8 = message_g, b8 = message_b;
-        if (is_hull_warn) {
-            float pulse = 0.5f + 0.5f * sinf((float)sapp_frame_count() * 0.06f);
-            r8 = (uint8_t)(message_r * pulse);
-            g8 = (uint8_t)(40 + 20 * pulse);
-            b8 = (uint8_t)(40 + 10 * pulse);
-        }
-        /* Count non-empty wrapped lines. Subtitle anchors line 0 at 0.82
-         * of screen height; extra lines go BELOW (to avoid collision with
-         * docked UI above). Long station hails arrive as 2-4 lines. */
-        int count = 0;
-        for (int li = 0; li < HUD_MSG_LINES; li++) {
-            if (message_lines[li][0] != '\0') count = li + 1;
-        }
-        float msg_y = screen_h * 0.82f;
-        for (int li = 0; li < count; li++) {
-            char line_buf[256];
-            if (li == 0 && message_label[0] != '\0')
-                snprintf(line_buf, sizeof(line_buf), "%s: %s",
-                         message_label, message_lines[li]);
-            else
-                snprintf(line_buf, sizeof(line_buf), "%s", message_lines[li]);
-            float w = (float)strlen(line_buf) * cell;
-            float x = screen_w * 0.5f - w * 0.5f;
-            float y = msg_y + (float)li * cell * 1.25f;
-            sdtx_pos(x / cell, y / cell);
-            sdtx_color3b(r8, g8, b8);
-            sdtx_puts(line_buf);
-        }
-    }
-
-    /* --- [E] context prompt — only when docked. [E] is always LAUNCH. --- */
-    if (!g.death_cinematic.active && LOCAL_PLAYER.docked) {
-        float ex = ui_text_pos(message_x + 16.0f);
-        float ey = ui_text_pos(message_y + message_h + 6.0f);
-        sdtx_pos(ex, ey);
-        sdtx_color3b(PAL_TEXT_GREY);
-        sdtx_puts("[E] launch");
-    }
-
-    /* --- Multiplayer HUD indicator + version --- */
-    /* Version / connection status — top right */
-    {
-        float info_x = ui_text_pos(fmaxf(8.0f, screen_w - (compact ? 100.0f : 140.0f)));
-        float info_y = ui_text_pos(8.0f);
-        sdtx_pos(info_x, info_y);
-#ifdef GIT_HASH
-        const char* client_hash = GIT_HASH;
-#else
-        const char* client_hash = "dev";
-#endif
-        if (g.multiplayer_enabled && net_is_connected()) {
-            const char* srv = net_server_hash();
-            bool match = srv[0] != '\0' && strcmp(client_hash, srv) == 0;
-            if (match) {
-                /* Synced: show version */
-                sdtx_color3b(PAL_SYNC_OK);
-                sdtx_printf("v%s", client_hash);
-            } else if (srv[0] == '\0') {
-                /* Connecting */
-                sdtx_color3b(PAL_SYNC_CONNECTING);
-                sdtx_puts("connecting...");
-            } else {
-                /* Version mismatch — reloading (shown briefly before redirect) */
-                sdtx_color3b(PAL_SYNC_RESYNCING);
-                sdtx_puts("syncing...");
-            }
-        } else if (g.multiplayer_enabled) {
-            sdtx_color3b(PAL_SYNC_OFFLINE);
-            sdtx_puts("offline [P] reconnect");
-        } else {
-            sdtx_color3b(PAL_TEXT_GREY); /* offline version display */
-            sdtx_printf("v%s", client_hash);
-        }
-        /* Alpha banner: repeating ticker across the top */
-        {
-            float bw = ui_safe_positive(sapp_widthf(), 1280.0f)
-                     / fmaxf(1.0f, ui_safe_positive(sapp_dpi_scale(), 1.0f));
-            int cols = (int)(bw / 8.0f); /* sdtx char width ~8px */
-            char banner[512];
-            char segment[64];
-            snprintf(segment, sizeof(segment), "ALPHA // v%s // frequent server resets // ", client_hash);
-            int seg_len = (int)strlen(segment);
-            int pos = 0;
-            while (pos < cols && pos < (int)sizeof(banner) - 1) {
-                int left = (int)sizeof(banner) - 1 - pos;
-                int copy = seg_len < left ? seg_len : left;
-                memcpy(&banner[pos], segment, copy);
-                pos += copy;
-            }
-            banner[pos < (int)sizeof(banner) ? pos : (int)sizeof(banner) - 1] = '\0';
-            sdtx_pos(0.0f, 0.0f);
-            sdtx_color3b(PAL_ALPHA_BANNER);
-            sdtx_puts(banner);
-        }
-    }
-
-    /* Nearest station name — bottom left */
-    if (!LOCAL_PLAYER.docked) {
-        const station_t* nav_st = navigation_station_ptr();
-        if (nav_st && nav_st->name[0] != '\0') {
-            sdtx_pos(ui_text_pos(16.0f), ui_text_pos(screen_h - 20.0f));
-            sdtx_color3b(PAL_TEXT_FADED);
-            int name_cols = (int)((screen_w - 24.0f) / 8.0f);
-            sdtx_printf("%.*s", name_cols, nav_st->name);
-        }
-        /* Expire tracked contract */
-        if (g.tracked_contract >= 0 && g.tracked_contract < MAX_CONTRACTS) {
-            if (!g.world.contracts[g.tracked_contract].active)
-                g.tracked_contract = -1;
-        }
-    }
-
-    /* Station hail sigil — mini profile pic in the lower-left that fades in
-     * with hail_timer, acts as "caller ID" for the message now showing in
-     * the bottom-right hint bar. Sits above the nearest-station line so the
-     * two labels don't overlap. Uses the same avatar texture as the
-     * center-screen hail overlay — a unique image per station. */
-    if (g.hail_timer > 0.0f && g.hail_station_index >= 0
-        && g.hail_station_index < MAX_STATIONS) {
-        const avatar_cache_t *av = avatar_get(g.hail_station_index);
-        if (av && av->texture_valid) {
-            float alpha = fminf(g.hail_timer / 0.5f, 1.0f);
-            float sig_size = 48.0f;
-            float sx0 = 16.0f;
-            float sy0 = screen_h - sig_size - 32.0f; /* above the nav line */
-            /* Screen-space ortho — the rest of draw_hud already runs under
-             * this projection but the texture pipeline can have stale state
-             * from the world pass; reset explicitly, same as the center
-             * hail overlay does. */
-            sgl_defaults();
-            sgl_matrix_mode_projection();
-            sgl_load_identity();
-            sgl_ortho(0, screen_w, screen_h, 0, -1, 1);
-            sgl_matrix_mode_modelview();
-            sgl_load_identity();
-            sgl_enable_texture();
-            sgl_texture((sg_view){ av->view_id }, (sg_sampler){ av->sampler_id });
-            sgl_begin_quads();
-            sgl_c4f(alpha, alpha, alpha, alpha);
-            sgl_v2f_t2f(sx0,            sy0,            0.0f, 0.0f);
-            sgl_v2f_t2f(sx0 + sig_size, sy0,            1.0f, 0.0f);
-            sgl_v2f_t2f(sx0 + sig_size, sy0 + sig_size, 1.0f, 1.0f);
-            sgl_v2f_t2f(sx0,            sy0 + sig_size, 0.0f, 1.0f);
-            sgl_end();
-            sgl_disable_texture();
-            /* Gold border frame — "transmission active" reads like a radio
-             * indicator light around the sigil. */
-            float border_a = 0.70f * alpha;
-            sgl_begin_lines();
-            sgl_c4f(0.78f, 0.63f, 0.19f, border_a);
-            sgl_v2f(sx0,            sy0);            sgl_v2f(sx0 + sig_size, sy0);
-            sgl_v2f(sx0 + sig_size, sy0);            sgl_v2f(sx0 + sig_size, sy0 + sig_size);
-            sgl_v2f(sx0 + sig_size, sy0 + sig_size); sgl_v2f(sx0,            sy0 + sig_size);
-            sgl_v2f(sx0,            sy0 + sig_size); sgl_v2f(sx0,            sy0);
-            sgl_end();
-        }
-    }
-
-    /* Station hail — no center-screen overlay. The message is in the
-     * bottom-right hint bar (via set_notice at the hail event sites) and
-     * the station's unique sigil is drawn at lower-left in the draw_hud
-     * flow above, with the gold border acting as "transmission active".
-     * The old middle-of-screen portrait was obscuring gameplay. */
-
-    /* Module inspect pane */
-    if (g.inspect_station >= 0 && g.inspect_station < MAX_STATIONS &&
-        g.inspect_module >= 0 && !LOCAL_PLAYER.docked) {
-        const station_t *ist = &g.world.stations[g.inspect_station];
-        if (station_exists(ist) && g.inspect_module < ist->module_count) {
-            const station_module_t *im = &ist->modules[g.inspect_module];
-            float px = fmaxf(16.0f, screen_w - 260.0f);
-            float py = 60.0f;
-            float cell = 8.0f;
-
-            sdtx_pos(px / cell, py / cell);
-            sdtx_color3b(PAL_ORE_AMBER);
-            sdtx_printf("[ %s ]", module_type_name(im->type));
-
-            sdtx_pos(px / cell, (py + 14.0f) / cell);
-            sdtx_color3b(PAL_INSPECT_STATION);
-            sdtx_printf("Station: %s", ist->name);
-
-            sdtx_pos(px / cell, (py + 28.0f) / cell);
-            sdtx_color3b(PAL_INSPECT_LOCATION);
-            sdtx_printf("Ring %d  Slot %d", im->ring, im->slot);
-
-            if (im->scaffold) {
-                sdtx_pos(px / cell, (py + 42.0f) / cell);
-                if (im->build_progress < 1.0f) {
-                    int pct = (int)lroundf(im->build_progress * 100.0f);
-                    sdtx_color3b(PAL_BUILD_SUPPLYING); /* orange — awaiting material */
-                    sdtx_printf("SUPPLYING: %d%%", pct);
-                } else {
-                    int pct = (int)lroundf((im->build_progress - 1.0f) * 100.0f);
-                    sdtx_color3b(PAL_BUILD_BUILDING); /* amber — build timer */
-                    sdtx_printf("BUILDING: %d%%", pct);
-                }
-            } else {
-                sdtx_pos(px / cell, (py + 42.0f) / cell);
-                sdtx_color3b(PAL_ACTIVE);
-                sdtx_puts("ONLINE");
-            }
-
-            /* Close hint */
-            sdtx_pos(px / cell, (py + 60.0f) / cell);
-            sdtx_color3b(PAL_TEXT_GREY);
-            sdtx_puts("[E] close");
-        } else {
-            g.inspect_station = -1;
-        }
-    }
-
-    /* --- SIGNAL LOST warning — center screen, blinking --- */
-    if (sig_quality < 0.01f && !LOCAL_PLAYER.docked && g.death_screen_timer <= 0.0f
-        && !g.death_cinematic.active) {
-        float blink = sinf(g.world.time * 3.0f); /* ~0.5Hz blink */
-        if (blink > 0.0f) {
-            float cell = 8.0f;
-            const char *warn = "[ SIGNAL LOST ]";
-            float tw = (float)strlen(warn) * cell;
-            float wx = (screen_w * 0.5f - tw * 0.5f) / cell;
-            float wy = (screen_h * 0.40f) / cell;
-            sdtx_canvas(screen_w, screen_h);
-            sdtx_origin(0.0f, 0.0f);
-            uint8_t ba = (uint8_t)(blink * 200.0f);
-            sdtx_color4b(255, 70, 50, ba);
-            sdtx_pos(wx, wy);
-            sdtx_puts(warn);
-        }
-    }
-
-    draw_station_services(&ui);
+    /* Row 3: action context */
+    draw_wide_action_row(s);
 }
+
+/* True if the sell-batch summary has any non-zero grade count to draw. */
+static bool sell_batch_has_content(void) {
+    if (!g.sell_batch.active && g.sell_batch.display_timer <= 0.0f) return false;
+    for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
+        if (g.sell_batch.grade_counts[gi] > 0) return true;
+    }
+    return false;
+}
+
+/* Sell-batch summary takes priority when it has content — the line is
+ * rendered as colored segments (total in white/gold, each grade label
+ * in its canonical color) so the player can see at a glance which
+ * grades just paid out. See shared/mining.h:mining_grade_rgb for the
+ * palette. */
+static void draw_sell_batch_subtitle(float screen_w, float screen_h) {
+    const float cell = 8.0f;
+    char head[32], tail[160];
+    int head_len = snprintf(head, sizeof(head), "[ +$%d", g.sell_batch.total_cr);
+    int tail_off = 0;
+    if (g.sell_batch.any_by_contract)
+        tail_off += snprintf(tail + tail_off, sizeof(tail) - tail_off, "  contract");
+    for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
+        int n = g.sell_batch.grade_counts[gi];
+        if (n <= 0) continue;
+        tail_off += snprintf(tail + tail_off, sizeof(tail) - tail_off,
+                             "  %s x%d", mining_grade_label((mining_grade_t)gi), n);
+        if (tail_off >= (int)sizeof(tail) - 8) break;
+    }
+    int total_cols = head_len + tail_off + 2; /* " ]" */
+    float msg_w = (float)total_cols * cell;
+    float msg_x0 = screen_w * 0.5f - msg_w * 0.5f;
+    float msg_y = screen_h * 0.82f;
+
+    /* Fade during the display tail (last 1s of display_timer). */
+    float alpha = 1.0f;
+    if (!g.sell_batch.active && g.sell_batch.display_timer < 1.0f)
+        alpha = g.sell_batch.display_timer;
+    if (alpha < 0.0f) alpha = 0.0f;
+
+    uint8_t total_r = g.sell_batch.any_by_contract ? 255 : 200;
+    uint8_t total_g = g.sell_batch.any_by_contract ? 210 : 220;
+    uint8_t total_b = g.sell_batch.any_by_contract ?  60 : 230;
+    float cur_x = msg_x0;
+
+    sdtx_pos(cur_x / cell, msg_y / cell);
+    sdtx_color4b(total_r, total_g, total_b, (uint8_t)(alpha * 255.0f));
+    sdtx_puts(head);
+    cur_x += (float)head_len * cell;
+
+    if (g.sell_batch.any_by_contract) {
+        const char *tag = "  contract";
+        sdtx_pos(cur_x / cell, msg_y / cell);
+        sdtx_color4b(255, 210, 60, (uint8_t)(alpha * 255.0f));
+        sdtx_puts(tag);
+        cur_x += (float)strlen(tag) * cell;
+    }
+
+    for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
+        int n = g.sell_batch.grade_counts[gi];
+        if (n <= 0) continue;
+        char seg[32];
+        int seg_len = snprintf(seg, sizeof(seg), "  %s x%d",
+                               mining_grade_label((mining_grade_t)gi), n);
+        uint8_t gr, gg_, gb;
+        mining_grade_rgb((mining_grade_t)gi, &gr, &gg_, &gb);
+        sdtx_pos(cur_x / cell, msg_y / cell);
+        sdtx_color4b(gr, gg_, gb, (uint8_t)(alpha * 255.0f));
+        sdtx_puts(seg);
+        cur_x += (float)seg_len * cell;
+    }
+
+    sdtx_pos(cur_x / cell, msg_y / cell);
+    sdtx_color4b(total_r, total_g, total_b, (uint8_t)(alpha * 255.0f));
+    sdtx_puts(" ]");
+}
+
+/* Multi-line message subtitle for compact HUD. Stacks lines upward from
+ * the screen-bottom anchor so the newest line sits at the panel bottom. */
+static void draw_message_subtitle_compact(const hud_state_t *s) {
+    if (!hud_should_draw_message_panel()) return;
+    float cell = HUD_CELL * ui_text_zoom();
+    int first = -1, last = -1;
+    for (int li = 0; li < HUD_MSG_LINES; li++) {
+        if (s->message_lines[li][0] != '\0') {
+            if (first < 0) first = li;
+            last = li;
+        }
+    }
+    int count = (last >= first) ? (last - first + 1) : 0;
+    for (int vi = 0; vi < count; vi++) {
+        int li = first + vi;
+        char full_msg[256];
+        if (vi == 0 && s->message_label[0] != '\0')
+            snprintf(full_msg, sizeof(full_msg), "%s: %s",
+                     s->message_label, s->message_lines[li]);
+        else
+            snprintf(full_msg, sizeof(full_msg), "%s", s->message_lines[li]);
+        float msg_w = (float)strlen(full_msg) * cell;
+        float msg_x = (s->screen_w * 0.5f - msg_w * 0.5f) / cell;
+        float msg_y = (s->screen_h - 32.0f - (float)(count - 1 - vi) * cell * 1.25f) / cell;
+        sdtx_pos(msg_x, msg_y);
+        sdtx_color3b(s->message_r, s->message_g, s->message_b);
+        sdtx_puts(full_msg);
+    }
+}
+
+/* Multi-line message subtitle for wide HUD. Anchors line 0 at 0.82 of
+ * screen height; extra lines go BELOW (the wide HUD has no docked-UI
+ * collision overhead). Long station hails arrive as 2-4 lines. */
+static void draw_message_subtitle_wide(const hud_state_t *s) {
+    if (!hud_should_draw_message_panel()) return;
+    float cell = 8.0f;
+    bool is_hull_warn = (s->message_r == 255 && s->message_g == 60);
+    uint8_t r8 = s->message_r, g8 = s->message_g, b8 = s->message_b;
+    if (is_hull_warn) {
+        float pulse = 0.5f + 0.5f * sinf((float)sapp_frame_count() * 0.06f);
+        r8 = (uint8_t)(s->message_r * pulse);
+        g8 = (uint8_t)(40 + 20 * pulse);
+        b8 = (uint8_t)(40 + 10 * pulse);
+    }
+    int count = 0;
+    for (int li = 0; li < HUD_MSG_LINES; li++) {
+        if (s->message_lines[li][0] != '\0') count = li + 1;
+    }
+    float msg_y = s->screen_h * 0.82f;
+    for (int li = 0; li < count; li++) {
+        char line_buf[256];
+        if (li == 0 && s->message_label[0] != '\0')
+            snprintf(line_buf, sizeof(line_buf), "%s: %s",
+                     s->message_label, s->message_lines[li]);
+        else
+            snprintf(line_buf, sizeof(line_buf), "%s", s->message_lines[li]);
+        float w = (float)strlen(line_buf) * cell;
+        float x = s->screen_w * 0.5f - w * 0.5f;
+        float y = msg_y + (float)li * cell * 1.25f;
+        sdtx_pos(x / cell, y / cell);
+        sdtx_color3b(r8, g8, b8);
+        sdtx_puts(line_buf);
+    }
+}
+
+/* [E] context prompt — only when docked. [E] is always LAUNCH. */
+static void draw_dock_prompt(const hud_state_t *s) {
+    if (g.death_cinematic.active || !LOCAL_PLAYER.docked) return;
+    sdtx_pos(ui_text_pos(s->message_x + 16.0f),
+             ui_text_pos(s->message_y + s->message_h + 6.0f));
+    sdtx_color3b(PAL_TEXT_GREY);
+    sdtx_puts("[E] launch");
+}
+
+/* Top-right version + connection status. Choose color by sync state. */
+static void draw_version_status(float info_x, float info_y, const char *client_hash) {
+    sdtx_pos(info_x, info_y);
+    if (g.multiplayer_enabled && net_is_connected()) {
+        const char* srv = net_server_hash();
+        bool match = srv[0] != '\0' && strcmp(client_hash, srv) == 0;
+        if (match) {
+            sdtx_color3b(PAL_SYNC_OK);
+            sdtx_printf("v%s", client_hash);
+        } else if (srv[0] == '\0') {
+            sdtx_color3b(PAL_SYNC_CONNECTING);
+            sdtx_puts("connecting...");
+        } else {
+            sdtx_color3b(PAL_SYNC_RESYNCING);
+            sdtx_puts("syncing...");
+        }
+    } else if (g.multiplayer_enabled) {
+        sdtx_color3b(PAL_SYNC_OFFLINE);
+        sdtx_puts("offline [P] reconnect");
+    } else {
+        sdtx_color3b(PAL_TEXT_GREY);
+        sdtx_printf("v%s", client_hash);
+    }
+}
+
+/* Repeating ALPHA banner across the very top of the screen. */
+static void draw_alpha_banner(const char *client_hash) {
+    float bw = ui_safe_positive(sapp_widthf(), 1280.0f)
+             / fmaxf(1.0f, ui_safe_positive(sapp_dpi_scale(), 1.0f));
+    int cols = (int)(bw / 8.0f); /* sdtx char width ~8px */
+    char banner[512];
+    char segment[64];
+    snprintf(segment, sizeof(segment),
+             "ALPHA // v%s // frequent server resets // ", client_hash);
+    int seg_len = (int)strlen(segment);
+    int pos = 0;
+    while (pos < cols && pos < (int)sizeof(banner) - 1) {
+        int left = (int)sizeof(banner) - 1 - pos;
+        int copy = seg_len < left ? seg_len : left;
+        memcpy(&banner[pos], segment, copy);
+        pos += copy;
+    }
+    banner[pos < (int)sizeof(banner) ? pos : (int)sizeof(banner) - 1] = '\0';
+    sdtx_pos(0.0f, 0.0f);
+    sdtx_color3b(PAL_ALPHA_BANNER);
+    sdtx_puts(banner);
+}
+
+static void draw_status_strip(const hud_state_t *s) {
+    float info_x = ui_text_pos(fmaxf(8.0f, s->screen_w - (s->compact ? 100.0f : 140.0f)));
+    float info_y = ui_text_pos(8.0f);
+#ifdef GIT_HASH
+    const char* client_hash = GIT_HASH;
+#else
+    const char* client_hash = "dev";
+#endif
+    draw_version_status(info_x, info_y, client_hash);
+    draw_alpha_banner(client_hash);
+}
+
+/* Nearest-station name + tracked-contract sweep. Bottom-left. */
+static void draw_nav_label(const hud_state_t *s) {
+    if (LOCAL_PLAYER.docked) return;
+    const station_t* nav_st = navigation_station_ptr();
+    if (nav_st && nav_st->name[0] != '\0') {
+        sdtx_pos(ui_text_pos(16.0f), ui_text_pos(s->screen_h - 20.0f));
+        sdtx_color3b(PAL_TEXT_FADED);
+        int name_cols = (int)((s->screen_w - 24.0f) / 8.0f);
+        sdtx_printf("%.*s", name_cols, nav_st->name);
+    }
+    if (g.tracked_contract >= 0 && g.tracked_contract < MAX_CONTRACTS
+        && !g.world.contracts[g.tracked_contract].active)
+        g.tracked_contract = -1;
+}
+
+/* Station hail sigil — mini profile pic in the lower-left that fades in
+ * with hail_timer, acts as "caller ID" for the message in the bottom-
+ * right hint bar. Sits above the nearest-station line so the two
+ * labels don't overlap. Uses the same avatar texture as the
+ * (now-removed) center-screen hail overlay. */
+static void draw_hail_sigil(const hud_state_t *s) {
+    if (g.hail_timer <= 0.0f) return;
+    if (g.hail_station_index < 0 || g.hail_station_index >= MAX_STATIONS) return;
+    const avatar_cache_t *av = avatar_get(g.hail_station_index);
+    if (!av || !av->texture_valid) return;
+
+    float alpha = fminf(g.hail_timer / 0.5f, 1.0f);
+    float sig_size = 48.0f;
+    float sx0 = 16.0f;
+    float sy0 = s->screen_h - sig_size - 32.0f;
+    /* Reset GL state — the world pass can leave projection/texture state
+     * in places that confuse this overlay. Same dance the (removed)
+     * center hail overlay did. */
+    sgl_defaults();
+    sgl_matrix_mode_projection();
+    sgl_load_identity();
+    sgl_ortho(0, s->screen_w, s->screen_h, 0, -1, 1);
+    sgl_matrix_mode_modelview();
+    sgl_load_identity();
+    sgl_enable_texture();
+    sgl_texture((sg_view){ av->view_id }, (sg_sampler){ av->sampler_id });
+    sgl_begin_quads();
+    sgl_c4f(alpha, alpha, alpha, alpha);
+    sgl_v2f_t2f(sx0,            sy0,            0.0f, 0.0f);
+    sgl_v2f_t2f(sx0 + sig_size, sy0,            1.0f, 0.0f);
+    sgl_v2f_t2f(sx0 + sig_size, sy0 + sig_size, 1.0f, 1.0f);
+    sgl_v2f_t2f(sx0,            sy0 + sig_size, 0.0f, 1.0f);
+    sgl_end();
+    sgl_disable_texture();
+    /* Gold border — "transmission active" reads like a radio
+     * indicator light around the sigil. */
+    float border_a = 0.70f * alpha;
+    sgl_begin_lines();
+    sgl_c4f(0.78f, 0.63f, 0.19f, border_a);
+    sgl_v2f(sx0,            sy0);            sgl_v2f(sx0 + sig_size, sy0);
+    sgl_v2f(sx0 + sig_size, sy0);            sgl_v2f(sx0 + sig_size, sy0 + sig_size);
+    sgl_v2f(sx0 + sig_size, sy0 + sig_size); sgl_v2f(sx0,            sy0 + sig_size);
+    sgl_v2f(sx0,            sy0 + sig_size); sgl_v2f(sx0,            sy0);
+    sgl_end();
+}
+
+static void draw_inspect_pane(const hud_state_t *s) {
+    if (LOCAL_PLAYER.docked) return;
+    if (g.inspect_station < 0 || g.inspect_station >= MAX_STATIONS) return;
+    if (g.inspect_module < 0) return;
+    const station_t *ist = &g.world.stations[g.inspect_station];
+    if (!station_exists(ist) || g.inspect_module >= ist->module_count) {
+        g.inspect_station = -1;
+        return;
+    }
+    const station_module_t *im = &ist->modules[g.inspect_module];
+    float px = fmaxf(16.0f, s->screen_w - 260.0f);
+    float py = 60.0f;
+    float cell = 8.0f;
+
+    sdtx_pos(px / cell, py / cell);
+    sdtx_color3b(PAL_ORE_AMBER);
+    sdtx_printf("[ %s ]", module_type_name(im->type));
+
+    sdtx_pos(px / cell, (py + 14.0f) / cell);
+    sdtx_color3b(PAL_INSPECT_STATION);
+    sdtx_printf("Station: %s", ist->name);
+
+    sdtx_pos(px / cell, (py + 28.0f) / cell);
+    sdtx_color3b(PAL_INSPECT_LOCATION);
+    sdtx_printf("Ring %d  Slot %d", im->ring, im->slot);
+
+    sdtx_pos(px / cell, (py + 42.0f) / cell);
+    if (!im->scaffold) {
+        sdtx_color3b(PAL_ACTIVE);
+        sdtx_puts("ONLINE");
+    } else if (im->build_progress < 1.0f) {
+        int pct = (int)lroundf(im->build_progress * 100.0f);
+        sdtx_color3b(PAL_BUILD_SUPPLYING); /* orange — awaiting material */
+        sdtx_printf("SUPPLYING: %d%%", pct);
+    } else {
+        int pct = (int)lroundf((im->build_progress - 1.0f) * 100.0f);
+        sdtx_color3b(PAL_BUILD_BUILDING); /* amber — build timer */
+        sdtx_printf("BUILDING: %d%%", pct);
+    }
+
+    sdtx_pos(px / cell, (py + 60.0f) / cell);
+    sdtx_color3b(PAL_TEXT_GREY);
+    sdtx_puts("[E] close");
+}
+
+/* SIGNAL LOST warning — center screen, blinking. */
+static void draw_signal_lost(const hud_state_t *s) {
+    if (s->sig_quality >= 0.01f) return;
+    if (LOCAL_PLAYER.docked) return;
+    if (g.death_screen_timer > 0.0f || g.death_cinematic.active) return;
+    float blink = sinf(g.world.time * 3.0f);
+    if (blink <= 0.0f) return;
+    float cell = 8.0f;
+    const char *warn = "[ SIGNAL LOST ]";
+    float tw = (float)strlen(warn) * cell;
+    float wx = (s->screen_w * 0.5f - tw * 0.5f) / cell;
+    float wy = (s->screen_h * 0.40f) / cell;
+    sdtx_canvas(s->screen_w, s->screen_h);
+    sdtx_origin(0.0f, 0.0f);
+    sdtx_color4b(255, 70, 50, (uint8_t)(blink * 200.0f));
+    sdtx_pos(wx, wy);
+    sdtx_puts(warn);
+}
+
+void draw_hud(void) {
+    hud_state_t s;
+    compute_hud_state(&s);
+    if (draw_death_screen_if_active(&s)) return;
+
+    if (s.compact) {
+        draw_compact_top(&s);
+        if (sell_batch_has_content())
+            draw_sell_batch_subtitle(s.screen_w, s.screen_h);
+        else
+            draw_message_subtitle_compact(&s);
+        draw_station_services(&s.ui);
+        return;
+    }
+
+    draw_wide_top(&s);
+    if (sell_batch_has_content())
+        draw_sell_batch_subtitle(s.screen_w, s.screen_h);
+    else
+        draw_message_subtitle_wide(&s);
+    draw_dock_prompt(&s);
+    draw_status_strip(&s);
+    draw_nav_label(&s);
+    draw_hail_sigil(&s);
+    draw_inspect_pane(&s);
+    draw_signal_lost(&s);
+    draw_station_services(&s.ui);
+}
+
