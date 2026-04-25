@@ -2,6 +2,10 @@
  * server start. Hits the directory walk, the insertion sort, the ring
  * truncation, and the next_id watermark. POSIX-only (the function
  * itself no-ops on Windows, where the server isn't deployed). */
+/* mkdtemp lives behind feature-test macros under glibc with -std=c11;
+ * declare them before any header pulls in <features.h>. */
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
 #include "tests/test_harness.h"
 #include "game_sim.h"
 
