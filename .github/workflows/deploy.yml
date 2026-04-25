@@ -78,9 +78,17 @@ jobs:
             2>&1 | tee clang-tidy-output.txt
           if grep -q "error:" clang-tidy-output.txt; then exit 1; fi
 
-  # Valgrind: slowest, parallel with everything else.
+  # Valgrind: slowest sweep, ~30 min. Runs on main only AND only after
+  # deploy succeeds — it's a post-deploy verification, not a gate. The
+  # PR loop relies on test-asan for fast definite-leak detection;
+  # valgrind catches the deeper memcheck issues asan doesn't, but
+  # blocking deploy on it would add 30 min to every prod release.
+  # Failure here surfaces as a red post-deploy check (paging signal),
+  # not a deploy block.
   test-valgrind:
     runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - name: Install valgrind
