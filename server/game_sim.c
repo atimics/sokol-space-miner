@@ -1635,8 +1635,12 @@ static void place_towed_scaffold(world_t *w, server_player_t *sp) {
         }
     }
 
-    /* Materialize a nearby planned station if scaffold is close to it. */
-    {
+    /* Materialize a nearby planned station if scaffold is close to it.
+     * Only a SIGNAL RELAY scaffold can found (or materialize) a
+     * station — the relay IS the station's core, not just another
+     * module. Other module types must be towed to an already-active
+     * outpost and snapped into a ring slot. */
+    if (sc->module_type == MODULE_SIGNAL_RELAY) {
         const float MATERIALIZE_RANGE = 600.0f;
         const float MATERIALIZE_RANGE_SQ = MATERIALIZE_RANGE * MATERIALIZE_RANGE;
         for (int s = 3; s < MAX_STATIONS; s++) {
@@ -1651,7 +1655,8 @@ static void place_towed_scaffold(world_t *w, server_player_t *sp) {
             st->dock_radius = OUTPOST_DOCK_RADIUS;
             st->signal_range = OUTPOST_SIGNAL_RANGE;
             add_module_at(st, MODULE_DOCK, 0, 0xFF);
-            add_module_at(st, MODULE_SIGNAL_RELAY, 0, 0xFF);
+            /* The towed relay becomes the station's core relay below;
+             * don't auto-add an extra one here. */
             rebuild_station_services(st);
             /* Generate supply contract for activation frames */
             for (int k = 0; k < MAX_CONTRACTS; k++) {
@@ -1720,8 +1725,14 @@ static void place_towed_scaffold(world_t *w, server_player_t *sp) {
         }
     }
 
-    /* Not near an outpost — found a new station if in signal range */
-    if (signal_strength_at(w, sc->pos) > 0.0f && can_place_outpost(w, sc->pos)) {
+    /* Not near an outpost — found a new station if the towed kit is a
+     * SIGNAL RELAY (only relays can found stations, per the founding
+     * ritual: tow the seed, not every brick) and we're in signal
+     * range. Other module types fall through and keep towing — they
+     * need an existing outpost to snap to. */
+    if (sc->module_type == MODULE_SIGNAL_RELAY
+        && signal_strength_at(w, sc->pos) > 0.0f
+        && can_place_outpost(w, sc->pos)) {
         int slot = -1;
         for (int s = 3; s < MAX_STATIONS; s++) {
             if (!station_exists(&w->stations[s])) { slot = s; break; }
@@ -1736,13 +1747,13 @@ static void place_towed_scaffold(world_t *w, server_player_t *sp) {
             st->radius = OUTPOST_RADIUS;
             st->dock_radius = OUTPOST_DOCK_RADIUS;
             st->signal_range = OUTPOST_SIGNAL_RANGE;
-            /* Outpost is born under construction — needs frames delivered to
-             * activate. The scaffold you towed becomes the first module
-             * (pre-paid), but it can't go live until the station does. */
+            /* Outpost is born under construction — needs frames delivered
+             * to activate. The towed relay seed becomes the station's
+             * core relay (added below); the dock comes pre-stamped. */
             st->scaffold = true;
             st->scaffold_progress = 0.0f;
             add_module_at(st, MODULE_DOCK, 0, 0xFF);
-            add_module_at(st, MODULE_SIGNAL_RELAY, 0, 0xFF);
+            /* Relay added by the founding-tow path below. */
             rebuild_station_services(st);
             /* Generate supply contract for the outpost activation frames */
             for (int k = 0; k < MAX_CONTRACTS; k++) {
@@ -1777,7 +1788,19 @@ static void place_towed_scaffold(world_t *w, server_player_t *sp) {
             return;
         }
     }
-    /* Can't place here — do nothing, keep towing */
+    /* Can't place here — do nothing, keep towing.
+     *
+     * Common reasons:
+     *   - Towed kit isn't a signal relay (only relays can found new
+     *     outposts; other modules need an existing station ring slot).
+     *   - Position is outside signal coverage or fails can_place_outpost.
+     *
+     * Surface a notice so the player knows why the [E] press fizzled
+     * instead of silently continuing the tow. */
+    emit_event(w, (sim_event_t){
+        .type = SIM_EVENT_ORDER_REJECTED,
+        .player_id = sp->id,
+    });
 }
 
 static void step_scaffold_tow(world_t *w, server_player_t *sp, float dt) {
