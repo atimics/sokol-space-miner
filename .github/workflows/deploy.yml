@@ -99,6 +99,99 @@ jobs:
             --main-stacksize=16777216 \
             ./build-valgrind/signal_test 2>&1 | tail -30
 
+  # CRAP score (complexity * uncovered). Report-only — does not gate deploy.
+  test-crap:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lizard + gcovr
+        run: pip install --quiet lizard gcovr
+
+      - name: Build signal_test with coverage
+        run: |
+          cmake -S . -B build-coverage -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS_ONLY=ON \
+            -DCMAKE_C_FLAGS="--coverage -O0 -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+          cmake --build build-coverage --target signal_test
+
+      - name: Run tests (collect coverage)
+        run: |
+          ulimit -s 16384
+          ./build-coverage/signal_test --quiet
+
+      - name: Generate gcovr JSON
+        run: |
+          gcovr -r . --json coverage.json --gcov-ignore-parse-errors \
+            --filter 'server/.*' --filter 'src/.*' --filter 'shared/.*' \
+            --exclude 'server/mongoose\..*' \
+            --exclude 'src/stb_image\.h' \
+            --exclude 'src/pl_mpeg\.h' \
+            --exclude 'src/minimp3\.h' \
+            build-coverage
+
+      # Sim code + pure helpers are the files signal_test actually links,
+      # so coverage is meaningful and CRAP is actionable.
+      - name: Compute CRAP (tested code)
+        run: |
+          python3 scripts/crap.py --coverage coverage.json \
+            --paths server/game_sim.c server/sim_ai.c server/sim_autopilot.c \
+                    server/sim_flight.c server/sim_nav.c server/sim_save.c \
+                    server/sim_catalog.c server/sim_asteroid.c \
+                    server/sim_physics.c server/sim_production.c \
+                    server/sim_construction.c \
+                    src/commodity.c src/manifest.c src/ship.c src/economy.c \
+                    src/asteroid.c src/rng.c \
+                    shared \
+            --top 30 --threshold 30 \
+            --json-out crap-tested.json | tee crap-tested.txt
+
+      # Client render/input/net + server entry point aren't linked into
+      # signal_test. Coverage is always 0% here; treat as pure complexity.
+      - name: Complexity budget (untested code)
+        run: |
+          python3 scripts/crap.py --coverage coverage.json \
+            --paths src/main.c src/hud.c src/input.c src/world_draw.c \
+                    src/station_ui.c src/net.c src/net_sync.c src/audio.c \
+                    src/client.h src/hud.c src/local_server.c \
+                    server/main.c \
+            --top 30 --threshold 30 \
+            --json-out crap-client.json | tee crap-client.txt
+
+      - name: Summarize in job summary
+        if: always()
+        run: |
+          {
+            echo "### CRAP — tested code (sim + helpers + shared)"
+            echo ""
+            echo 'Real CRAP: coverage is meaningful. Fix by lowering complexity _or_ raising coverage.'
+            echo ''
+            echo '```'
+            cat crap-tested.txt
+            echo '```'
+            echo ""
+            echo "### Complexity budget (client + server entry — not linked into signal_test)"
+            echo ""
+            echo 'Coverage always reads 0% here because signal_test does not link this code. Treat as a pure complexity report.'
+            echo ''
+            echo '```'
+            cat crap-client.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CRAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crap-report
+          path: |
+            crap-tested.json
+            crap-tested.txt
+            crap-client.json
+            crap-client.txt
+            coverage.json
+
   # Client WASM build — parallel with tests.
   build-client:
     runs-on: ubuntu-latest
