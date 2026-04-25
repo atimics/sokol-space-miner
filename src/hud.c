@@ -1305,7 +1305,11 @@ void draw_hud(void) {
         }
         float msg_y = screen_h * 0.82f;
         for (int li = 0; li < count; li++) {
-            char line_buf[256];
+            /* 512 (was 256): GCC -Werror=format-truncation traces the
+             * message_label (32) + ": " + a wrapped line (HUD_MSG_LINE_CAP)
+             * and decides 256 might overflow. Bumping silences the warning
+             * without forcing an explicit length check. */
+            char line_buf[512];
             if (li == 0 && message_label[0] != '\0')
                 snprintf(line_buf, sizeof(line_buf), "%s: %s",
                          message_label, message_lines[li]);
