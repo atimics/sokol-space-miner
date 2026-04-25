@@ -100,10 +100,10 @@ TEST(test_station_primary_buy_per_dominant_module) {
     ASSERT_EQ_INT(station_primary_buy(&st), COMMODITY_CUPRITE_INGOT);
     /* Furnaces don't buy from players (ore arrives via fragment smelting). */
     seed_single_module_station(&st, MODULE_FURNACE);
-    ASSERT_EQ_INT(station_primary_buy(&st), (commodity_t)-1);
+    ASSERT_EQ_INT((int)station_primary_buy(&st), -1);
     /* No production module → no trade. */
     memset(&st, 0, sizeof st);
-    ASSERT_EQ_INT(station_primary_buy(&st), (commodity_t)-1);
+    ASSERT_EQ_INT((int)station_primary_buy(&st), -1);
 }
 
 TEST(test_station_primary_sell_per_dominant_module) {
@@ -121,9 +121,9 @@ TEST(test_station_primary_sell_per_dominant_module) {
     seed_single_module_station(&st, MODULE_TRACTOR_FAB);
     ASSERT_EQ_INT(station_primary_sell(&st), COMMODITY_TRACTOR_MODULE);
     seed_single_module_station(&st, MODULE_SIGNAL_RELAY);
-    ASSERT_EQ_INT(station_primary_sell(&st), (commodity_t)-1);
+    ASSERT_EQ_INT((int)station_primary_sell(&st), -1);
     memset(&st, 0, sizeof st);
-    ASSERT_EQ_INT(station_primary_sell(&st), (commodity_t)-1);
+    ASSERT_EQ_INT((int)station_primary_sell(&st), -1);
 }
 
 TEST(test_producer_module_for_commodity) {
