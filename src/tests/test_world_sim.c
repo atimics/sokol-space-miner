@@ -19,6 +19,11 @@ TEST(test_world_reset_spawns_asteroids) {
 }
 
 TEST(test_world_reset_spawns_npcs) {
+    /* Starter NPC roster covers the inter-station chain:
+     *   Prospect: 2 miners (ferrite), 2 haulers (ferrite -> Kepler)
+     *   Helios:   1 miner  (CU/CR),   1 hauler  (kits / modules out)
+     *   Kepler:                       1 hauler  (frames -> Helios)
+     * Plus a tow drone at each shipyard (Kepler, Helios). */
     WORLD_DECL;
     world_reset(&w);
     int miners = 0, haulers = 0;
@@ -27,8 +32,8 @@ TEST(test_world_reset_spawns_npcs) {
         if (w.npc_ships[i].role == NPC_ROLE_MINER) miners++;
         if (w.npc_ships[i].role == NPC_ROLE_HAULER) haulers++;
     }
-    ASSERT_EQ_INT(miners, 2);
-    ASSERT_EQ_INT(haulers, 2);
+    ASSERT_EQ_INT(miners, 3);
+    ASSERT_EQ_INT(haulers, 4);
 }
 
 TEST(test_player_init_ship_docked) {

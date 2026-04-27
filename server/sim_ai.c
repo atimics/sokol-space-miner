@@ -7,6 +7,7 @@
 #include "sim_ai.h"
 #include "sim_nav.h"
 #include "sim_flight.h"
+#include "sim_production.h" /* sim_can_smelt_ore for miner asteroid filter */
 #include "signal_model.h"
 #include "manifest.h"
 #include "ship.h"
@@ -411,18 +412,33 @@ static int npc_find_mineable_asteroid(const world_t *w, const npc_ship_t *npc) {
         if (!miner_target_taken(w, idx, self_char)) return idx;
     }
 
-    /* Normal: find nearest mineable asteroid */
-    int best = -1;
-    float best_d = 1e18f;
-    for (int i = 0; i < MAX_ASTEROIDS; i++) {
-        const asteroid_t *a = &w->asteroids[i];
-        if (!a->active || a->tier == ASTEROID_TIER_S) continue;
-        if (signal_npc_confidence(signal_strength_at(w, a->pos)) < 0.1f) continue;
-        if (miner_target_taken(w, i, self_char)) continue;
-        float d = v2_dist_sq(npc->pos, a->pos);
-        if (d < best_d) { best_d = d; best = i; }
+    /* Two-pass nearest search:
+     *   pass 1 — only ores the miner's HOME station can actually smelt.
+     *            Prevents a Prospect miner from filling its hold with
+     *            cuprite (Prospect has no FURNACE_CU); same for a Helios
+     *            miner grabbing ferrite ore.
+     *   pass 2 — any ore. Fallback so a miner is never idle when there's
+     *            ANY rock in range (e.g. early game with sparse spawns).
+     * Two passes preserve the "nearest available" feel while preferring
+     * useful loads. */
+    const station_t *home = (npc->home_station >= 0 && npc->home_station < MAX_STATIONS)
+                          ? &w->stations[npc->home_station]
+                          : NULL;
+    for (int pass = 0; pass < 2; pass++) {
+        int best = -1;
+        float best_d = 1e18f;
+        for (int i = 0; i < MAX_ASTEROIDS; i++) {
+            const asteroid_t *a = &w->asteroids[i];
+            if (!a->active || a->tier == ASTEROID_TIER_S) continue;
+            if (signal_npc_confidence(signal_strength_at(w, a->pos)) < 0.1f) continue;
+            if (miner_target_taken(w, i, self_char)) continue;
+            if (pass == 0 && home && !sim_can_smelt_ore(home, a->commodity)) continue;
+            float d = v2_dist_sq(npc->pos, a->pos);
+            if (d < best_d) { best_d = d; best = i; }
+        }
+        if (best >= 0) return best;
     }
-    return best;
+    return -1;
 }
 
 static void npc_steer_toward(npc_ship_t *npc, vec2 target, float accel, float turn_speed, float dt) {
