@@ -1065,7 +1065,8 @@ static void draw_verbs_view(const station_ui_state_t *ui,
         if (kits_needed < 0) kits_needed = 0;
         if (ui->hull_now >= ui->hull_max) {
             left_rgb = COL_DIM;
-            snprintf(right_buf, sizeof(right_buf), "hull full");
+            snprintf(right_buf, sizeof(right_buf), "kits [ %d / 0 ]",
+                     kits_avail);
         } else if (kits_avail <= 0) {
             left_rgb = COL_DIM;
             snprintf(right_buf, sizeof(right_buf), "no kits available");

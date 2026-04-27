@@ -498,13 +498,10 @@ static vec2 dock_berth_pos(const station_t *st, int berth);
 static float dock_berth_angle(const station_t *st, int berth);
 static int find_best_berth(const world_t *w, const station_t *st, int station_idx, vec2 ship_pos);
 
-/* Repair pricing now lives inline in try_repair_ship — kept around in
- * case future callers need a quote. */
-__attribute__((unused))
-static float sim_station_repair_cost(const ship_t *s) {
-    float missing = fmaxf(0.0f, ship_max_hull(s) - s->hull);
-    return ceilf(missing * STATION_REPAIR_COST_PER_HULL);
-}
+/* Repair pricing lives inline in try_repair_ship now. The standalone
+ * helper used to be kept around speculatively but it's dead in every
+ * TU and MSVC chokes on __attribute__((unused)) — drop it. Bring it
+ * back as a real function the moment a caller materializes. */
 
 /* Asteroid lifecycle, dynamics, fracture → sim_asteroid.c
  * sim_can_smelt_ore, sim_step_refinery_production, sim_step_station_production,
