@@ -590,19 +590,61 @@ static int ship_manifest_count_cg(const ship_t *ship,
  * select a row on the current page. [F] pages forward; pages wrap at
  * the last page so the UI never runs out. At-station trades show the
  * generic "$" symbol — contract payouts in WORK still name the issuing
- * station's currency because that's where the money actually lives. */
-typedef struct {
-    uint8_t     kind;       /* 0 = BUY (station sells), 1 = SELL (station buys) */
-    commodity_t commodity;
-    mining_grade_t grade;
-    int         stock;      /* units available on the active side */
-    int         unit_price; /* per-unit, already grade-multiplied */
-    bool        actionable; /* player can do this transaction right now */
-    bool        is_float_fallback; /* no manifest entry, legacy float */
-} trade_row_t;
+ * station's currency because that's where the money actually lives.
+ *
+ * trade_row_t and the pagination constants live in client.h so input.c
+ * can index into the same row list — see build_trade_rows below. */
 
-#define TRADE_ROWS_PER_PAGE 5
-#define TRADE_MAX_ROWS      20
+int build_trade_rows(const station_t *st, const ship_t *ship,
+                     trade_row_t out[], int max) {
+    if (!st || !ship || !out || max <= 0) return 0;
+    int row_count = 0;
+    float free_volume = ship_cargo_capacity(ship) - ship_total_cargo(ship);
+    float credits = player_current_balance();
+
+    /* BUY rows — one per (commodity, grade) where the station has
+     * stock AND has the producing module for that commodity. Walks
+     * every finished commodity (not just the dominant one) so a
+     * multi-furnace station like Helios surfaces all of its outputs. */
+    for (int c = COMMODITY_RAW_ORE_COUNT; c < COMMODITY_COUNT && row_count < max; c++) {
+        if (!station_produces(st, (commodity_t)c)) continue;
+        float price_base = station_sell_price(st, (commodity_t)c);
+        if (price_base <= FLOAT_EPSILON) continue;
+        for (int gi = 0; gi < MINING_GRADE_COUNT && row_count < max; gi++) {
+            int stock = station_manifest_count_cg(st, (commodity_t)c, (mining_grade_t)gi);
+            if (stock <= 0) continue;
+            int price = (int)lroundf(price_base
+                    * mining_payout_multiplier((mining_grade_t)gi));
+            float vol = commodity_volume((commodity_t)c);
+            bool can = (free_volume + FLOAT_EPSILON >= vol) && (credits >= (float)price);
+            out[row_count++] = (trade_row_t){
+                .kind = 0, .commodity = (commodity_t)c, .grade = (mining_grade_t)gi,
+                .stock = stock, .unit_price = price,
+                .actionable = can, .is_float_fallback = false,
+            };
+        }
+    }
+
+    /* SELL rows — every commodity the station consumes that the player
+     * is carrying. */
+    for (int c = COMMODITY_RAW_ORE_COUNT; c < COMMODITY_COUNT && row_count < max; c++) {
+        if (!station_consumes(st, (commodity_t)c)) continue;
+        float price_base = station_buy_price(st, (commodity_t)c);
+        if (price_base <= FLOAT_EPSILON) continue;
+        for (int gi = 0; gi < MINING_GRADE_COUNT && row_count < max; gi++) {
+            int held = ship_manifest_count_cg(ship, (commodity_t)c, (mining_grade_t)gi);
+            if (held <= 0) continue;
+            int price = (int)lroundf(price_base
+                    * mining_payout_multiplier((mining_grade_t)gi));
+            out[row_count++] = (trade_row_t){
+                .kind = 1, .commodity = (commodity_t)c, .grade = (mining_grade_t)gi,
+                .stock = held, .unit_price = price,
+                .actionable = (held > 0), .is_float_fallback = false,
+            };
+        }
+    }
+    return row_count;
+}
 
 static void draw_trade_view(const station_ui_state_t *ui,
                             float cx, float cy, float inner_w,
@@ -718,58 +760,10 @@ static void draw_trade_view(const station_ui_state_t *ui,
         my += row_h;
     }
 
-    /* Build the unified row list. BUY rows first (station's offering),
-     * SELL rows after (what the station buys from the hold). */
+    /* Single source of truth for the row list (shared with input.c so
+     * a [1] keypress always hits the same row drawn here). */
     trade_row_t rows[TRADE_MAX_ROWS];
-    int row_count = 0;
-
-    float free_volume = ship_cargo_capacity(ship) - ship_total_cargo(ship);
-    float credits = player_current_balance();
-
-    /* BUY rows — one per (commodity, grade) where the station has
-     * stock AND has the producing module for that commodity. Walks
-     * every finished commodity (not just the dominant one) so a
-     * multi-furnace station like Helios surfaces all of its outputs
-     * at once: previously the picker only showed the highest-priority
-     * module's output, so ferrite ingots smelted at Helios were
-     * invisible to the player. Manifest is authoritative. */
-    for (int c = COMMODITY_RAW_ORE_COUNT; c < COMMODITY_COUNT && row_count < TRADE_MAX_ROWS; c++) {
-        if (!station_produces(st, (commodity_t)c)) continue;
-        float price_base = station_sell_price(st, (commodity_t)c);
-        if (price_base <= FLOAT_EPSILON) continue;
-        for (int gi = 0; gi < MINING_GRADE_COUNT && row_count < TRADE_MAX_ROWS; gi++) {
-            int stock = station_manifest_count_cg(st, (commodity_t)c, (mining_grade_t)gi);
-            if (stock <= 0) continue;
-            int price = (int)lroundf(price_base
-                    * mining_payout_multiplier((mining_grade_t)gi));
-            float vol = commodity_volume((commodity_t)c);
-            bool can = (free_volume + FLOAT_EPSILON >= vol) && (credits >= (float)price);
-            rows[row_count++] = (trade_row_t){
-                .kind = 0, .commodity = (commodity_t)c, .grade = (mining_grade_t)gi,
-                .stock = stock, .unit_price = price,
-                .actionable = can, .is_float_fallback = false,
-            };
-        }
-    }
-
-    /* SELL rows — every commodity the station consumes that the player
-     * is carrying. Same widening as the BUY side. */
-    for (int c = COMMODITY_RAW_ORE_COUNT; c < COMMODITY_COUNT && row_count < TRADE_MAX_ROWS; c++) {
-        if (!station_consumes(st, (commodity_t)c)) continue;
-        float price_base = station_buy_price(st, (commodity_t)c);
-        if (price_base <= FLOAT_EPSILON) continue;
-        for (int gi = 0; gi < MINING_GRADE_COUNT && row_count < TRADE_MAX_ROWS; gi++) {
-            int held = ship_manifest_count_cg(ship, (commodity_t)c, (mining_grade_t)gi);
-            if (held <= 0) continue;
-            int price = (int)lroundf(price_base
-                    * mining_payout_multiplier((mining_grade_t)gi));
-            rows[row_count++] = (trade_row_t){
-                .kind = 1, .commodity = (commodity_t)c, .grade = (mining_grade_t)gi,
-                .stock = held, .unit_price = price,
-                .actionable = (held > 0), .is_float_fallback = false,
-            };
-        }
-    }
+    int row_count = build_trade_rows(st, ship, rows, TRADE_MAX_ROWS);
 
     /* Pagination — wrap the current page so [F] at the last page
      * returns to page 0 cleanly. TRADE_ROWS_PER_PAGE is small so page
