@@ -347,6 +347,28 @@ static const char *ui_station_currency(const station_t *st) {
     return (st->currency_name[0]) ? st->currency_name : "cr";
 }
 
+/* Compact form of the currency name — first word, lowercased and
+ * trimmed to <= 4 chars. Used by the header band when the full label
+ * ("prospect vouchers", 17 chars) won't fit. Falls back to "cr".
+ * Caller-owned buffer must be >= 5 bytes. */
+static void ui_station_currency_short(const station_t *st, char *out, size_t cap) {
+    if (cap == 0) return;
+    if (!st || !st->currency_name[0]) {
+        snprintf(out, cap, "cr");
+        return;
+    }
+    /* Take the first whitespace-delimited word. "prospect vouchers" -> "prospect" */
+    size_t i = 0, j = 0;
+    while (st->currency_name[i] != '\0' && st->currency_name[i] != ' ' &&
+           j < cap - 1 && j < 4) {
+        char c = st->currency_name[i];
+        out[j++] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+        i++;
+    }
+    out[j] = '\0';
+    if (j == 0) snprintf(out, cap, "cr");
+}
+
 
 
 /* ====================================================================
@@ -417,29 +439,33 @@ static void draw_header_band(const station_ui_state_t *ui,
     sdtx_puts(role_label);
 
     if (panel_w >= 360.0f) {
-        char right2[64];
         int balance = (int)lroundf(player_current_balance());
         float sig = signal_strength_at(&g.world, st->pos);
-        snprintf(right2, sizeof(right2), "ledger %d %s   sig %.2f",
-                 balance, ui_station_currency(st), sig);
-        float right2_w = (float)strlen(right2) * cell_w;
         float gap = 16.0f;
-        bool fits = (left_x + role_w + gap + right2_w)
-                  <= (panel_x + panel_w - right_margin);
-        /* If the full string wouldn't fit, try just "ledger N cur" (drop
-         * sig); if that still doesn't fit, drop the whole right side. */
-        if (!fits) {
-            snprintf(right2, sizeof(right2), "ledger %d %s",
-                     balance, ui_station_currency(st));
-            right2_w = (float)strlen(right2) * cell_w;
-            fits = (left_x + role_w + gap + right2_w)
-                 <= (panel_x + panel_w - right_margin);
-        }
-        if (fits) {
-            sdtx_pos(ui_text_pos(panel_x + panel_w - right_margin - right2_w),
+        float right_limit = panel_x + panel_w - right_margin;
+        float left_used = left_x + role_w + gap;
+
+        /* Try four progressively shorter forms, each guaranteed to
+         * convey at least the balance. Pick the longest that fits. */
+        char short_cur[8];
+        ui_station_currency_short(st, short_cur, sizeof(short_cur));
+        const char *full_cur = ui_station_currency(st);
+        const char *forms[4];
+        char buf0[64], buf1[64], buf2[64], buf3[32];
+        snprintf(buf0, sizeof(buf0), "ledger %d %s   sig %.2f",  balance, full_cur,  sig);
+        snprintf(buf1, sizeof(buf1), "ledger %d %s",             balance, full_cur);
+        snprintf(buf2, sizeof(buf2), "%d %s   sig %.2f",         balance, short_cur, sig);
+        snprintf(buf3, sizeof(buf3), "%d %s",                    balance, short_cur);
+        forms[0] = buf0; forms[1] = buf1; forms[2] = buf2; forms[3] = buf3;
+
+        for (int i = 0; i < 4; i++) {
+            float w = (float)strlen(forms[i]) * cell_w;
+            if (left_used + w > right_limit) continue;
+            sdtx_pos(ui_text_pos(right_limit - w),
                      ui_text_pos(panel_y + HEADER_L2));
             sdtx_color3b(PAL_TEXT_SECONDARY);
-            sdtx_puts(right2);
+            sdtx_puts(forms[i]);
+            break;
         }
     }
 
