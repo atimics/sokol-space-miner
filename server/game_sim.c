@@ -3274,6 +3274,12 @@ static void step_contracts(world_t *w, float dt) {
             int worst_idx = -1;
             for (int j = 0; j < 3; j++) {
                 if (!checks[j].needed) continue;
+                /* Don't import what we make ourselves. Helios has both
+                 * FURNACE_CU and LASER_FAB, so the local furnace feeds
+                 * the local fab — posting an import contract for the
+                 * same ingot duplicates supply and shows up to players
+                 * as "asking for what's already on the shelf". */
+                if (station_produces(st, checks[j].ingot)) continue;
                 float deficit = MAX_PRODUCT_STOCK * 0.5f - st->inventory[checks[j].ingot];
                 if (deficit > worst_deficit) { worst_deficit = deficit; worst_idx = j; }
             }
