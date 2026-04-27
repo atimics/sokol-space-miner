@@ -332,17 +332,49 @@ static void npc_resolve_asteroid_collisions(world_t *w, npc_ship_t *npc) {
         float d = sqrtf(d_sq);
         vec2 normal = d > 0.00001f ? v2_scale(delta, 1.0f / d) : v2(1.0f, 0.0f);
         npc->pos = v2_add(a->pos, v2_scale(normal, minimum));
-        float vel_toward = v2_dot(npc->vel, normal);
+        /* Use relative velocity so a flying rock catches a stationary
+         * NPC the same way it catches a stationary player. Mirrors
+         * resolve_ship_asteroid_collision. */
+        vec2 rel_vel = v2_sub(npc->vel, a->vel);
+        float vel_toward = v2_dot(rel_vel, normal);
         if (vel_toward < 0.0f) {
             float impact = -vel_toward;
-            npc->vel = v2_sub(npc->vel, v2_scale(normal, vel_toward * 1.0f));
-            /* Same formula as players (collision_damage_for in game_sim.h).
-             * NPCs feeding the kit-demand sink is the load-bearing reason
-             * the kit economy exists at all. */
-            float dmg = collision_damage_for(impact, 1.0f);
+            /* Mass-equal split: reflect rel_vel across the normal,
+             * splitting the change between NPC and rock. Identical to
+             * the player path for consistency. */
+            vec2 impulse = v2_scale(normal, vel_toward * 0.5f);
+            npc->vel = v2_sub(npc->vel, impulse);
+            a->vel   = v2_add(a->vel, impulse);
+            a->net_dirty = true;
+
+            /* Damage scales with rock size, same formula as players. */
+            float size_mult = a->radius / 30.0f;
+            if (size_mult < 0.5f) size_mult = 0.5f;
+            if (size_mult > 2.5f) size_mult = 2.5f;
+            float dmg = collision_damage_for(impact, size_mult);
             if (dmg > 0.0f) {
+                bool was_alive = npc->hull > 0.01f;
                 npc->hull -= dmg;
                 if (npc->hull < 0.0f) npc->hull = 0.0f;
+                /* If a player threw the rock and the NPC just died,
+                 * surface a kill-feed event. The asteroid's
+                 * last_towed_token survives release; the player who
+                 * threw it owns the kill. */
+                bool attributed =
+                    (a->last_towed_token[0] | a->last_towed_token[1] |
+                     a->last_towed_token[2] | a->last_towed_token[3] |
+                     a->last_towed_token[4] | a->last_towed_token[5] |
+                     a->last_towed_token[6] | a->last_towed_token[7]) != 0;
+                if (was_alive && npc->hull <= 0.01f && attributed) {
+                    sim_event_t ev = {
+                        .type = SIM_EVENT_NPC_KILL,
+                        .player_id = -1,
+                        .npc_kill = { .cause = DEATH_CAUSE_THROWN_ROCK,
+                                       .npc_role = (uint8_t)npc->role },
+                    };
+                    memcpy(ev.npc_kill.killer_token, a->last_towed_token, 8);
+                    emit_event(w, ev);
+                }
             }
         }
     }

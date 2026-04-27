@@ -228,6 +228,11 @@ typedef struct {
         float age;
         float menu_alpha;  /* eased toward 1 in phase 1 */
         float fragments[8][6]; /* per-shard: dx, dy, vx, vy, angle, spin */
+        /* Killer info — populated from SIM_EVENT_DEATH. cause is
+         * death_cause_t; killer_callsign is the resolved player name
+         * (empty string if unattributed or NPC kill). */
+        uint8_t cause;
+        char killer_callsign[8];
     } death_cinematic;
     /* --- Episode & Music --- */
     episode_state_t episode;

@@ -784,6 +784,34 @@ void draw_hud(void) {
         sdtx_color4b(PAL_DEATH_TITLE, a8);
         sdtx_puts(title);
 
+        /* Killer line — under the title, faded. Empty for unattributed
+         * deaths. cause is death_cause_t. */
+        {
+            char kbuf[64];
+            const char *cause_label = "";
+            switch (g.death_cinematic.cause) {
+                case DEATH_CAUSE_RAM:         cause_label = "ramming";       break;
+                case DEATH_CAUSE_THROWN_ROCK: cause_label = "thrown rock";   break;
+                case DEATH_CAUSE_ASTEROID:    cause_label = "asteroid";      break;
+                case DEATH_CAUSE_STATION:     cause_label = "station crush"; break;
+                case DEATH_CAUSE_SELF:        cause_label = "self-destruct"; break;
+                default: break;
+            }
+            kbuf[0] = '\0';
+            if (g.death_cinematic.killer_callsign[0] && cause_label[0]) {
+                snprintf(kbuf, sizeof(kbuf), "killed by %.7s -- %s",
+                         g.death_cinematic.killer_callsign, cause_label);
+            } else if (cause_label[0]) {
+                snprintf(kbuf, sizeof(kbuf), "%s", cause_label);
+            }
+            if (kbuf[0]) {
+                float kw = (float)strlen(kbuf) * cell;
+                sdtx_pos((cx - kw * 0.5f) / cell, (cy - 44.0f) / cell);
+                sdtx_color4b(PAL_TEXT_FADED, a8);
+                sdtx_puts(kbuf);
+            }
+        }
+
         /* Stats */
         float row = (cy - 16.0f) / cell;
         float left = fmaxf(1.0f, (cx - 110.0f) / cell);

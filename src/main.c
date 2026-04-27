@@ -461,6 +461,25 @@ void process_sim_events(const sim_events_t *events) {
                     g.death_credits_earned = ev->death.credits_earned;
                     g.death_credits_spent = ev->death.credits_spent;
                     g.death_asteroids_fractured = ev->death.asteroids_fractured;
+                    /* Resolve killer attribution. Walk the server-player
+                     * array for a session_token match; if found, copy the
+                     * callsign in. Unattributed deaths leave the field
+                     * empty so the HUD can fall back to a cause-only line. */
+                    g.death_cinematic.cause = ev->death.cause;
+                    g.death_cinematic.killer_callsign[0] = '\0';
+                    bool token_set = false;
+                    for (int b = 0; b < 8; b++)
+                        if (ev->death.killer_token[b]) { token_set = true; break; }
+                    if (token_set) {
+                        for (int p = 0; p < MAX_PLAYERS; p++) {
+                            if (memcmp(g.world.players[p].session_token,
+                                       ev->death.killer_token, 8) == 0) {
+                                memcpy(g.death_cinematic.killer_callsign,
+                                       g.world.players[p].callsign, 8);
+                                break;
+                            }
+                        }
+                    }
                     /* Snapshot the wreckage at the death position. The
                      * server has already respawned the ship at a station,
                      * so we use the position from the death event payload
