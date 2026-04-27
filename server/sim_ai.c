@@ -300,6 +300,71 @@ static void mirror_npc_to_character(world_t *w, int npc_slot) {
     }
 }
 
+/* Target NPC roster per starter station — must match the world_reset
+ * seed (see game_sim.c: spawn_npc calls). Outposts (>=3) are player-
+ * built and don't get auto-replenished here; they can scaffold their
+ * own NPCs via gameplay later. */
+static void station_target_npc_counts(int station_idx, const station_t *st,
+                                      int *miners, int *haulers) {
+    *miners = 0;
+    *haulers = 0;
+    if (!st || !station_is_active(st)) return;
+    switch (station_idx) {
+    case 0: *miners = 2; *haulers = 2; return;  /* Prospect */
+    case 1: *miners = 0; *haulers = 1; return;  /* Kepler   */
+    case 2: *miners = 1; *haulers = 1; return;  /* Helios   */
+    default: return;                            /* outposts: no auto */
+    }
+}
+
+/* Walk the active NPC pool and count active members per home station,
+ * per role. Used by replenish_npc_roster to pick the most-understaffed
+ * (station, role) pair. */
+static void count_npc_roster(const world_t *w,
+                             int miners[MAX_STATIONS],
+                             int haulers[MAX_STATIONS]) {
+    for (int s = 0; s < MAX_STATIONS; s++) { miners[s] = 0; haulers[s] = 0; }
+    for (int n = 0; n < MAX_NPC_SHIPS; n++) {
+        const npc_ship_t *npc = &w->npc_ships[n];
+        if (!npc->active) continue;
+        if (npc->home_station < 0 || npc->home_station >= MAX_STATIONS) continue;
+        if (npc->role == NPC_ROLE_MINER)  miners[npc->home_station]++;
+        if (npc->role == NPC_ROLE_HAULER) haulers[npc->home_station]++;
+    }
+}
+
+/* Spawn at most ONE NPC to fill the largest gap between actual and
+ * target roster. Drip-feed (caller gates with npc_respawn_timer) so a
+ * full wipe recovers gradually. Gated on station credit_pool > 100 so
+ * a broke station can't endlessly mint replacement drones — same bar
+ * as the contract dispatcher uses. Returns true if a spawn fired. */
+static bool replenish_npc_roster(world_t *w) {
+    int miners[MAX_STATIONS], haulers[MAX_STATIONS];
+    count_npc_roster(w, miners, haulers);
+
+    /* Find the largest shortfall across all (station, role) pairs.
+     * Tie-broken by station index (lower wins). */
+    int best_station = -1;
+    npc_role_t best_role = NPC_ROLE_MINER;
+    int best_shortfall = 0;
+    for (int s = 0; s < MAX_STATIONS; s++) {
+        int target_m = 0, target_h = 0;
+        station_target_npc_counts(s, &w->stations[s], &target_m, &target_h);
+        if (w->stations[s].credit_pool < 100.0f) continue;
+        int short_m = target_m - miners[s];
+        int short_h = target_h - haulers[s];
+        if (short_m > best_shortfall) {
+            best_shortfall = short_m; best_station = s; best_role = NPC_ROLE_MINER;
+        }
+        if (short_h > best_shortfall) {
+            best_shortfall = short_h; best_station = s; best_role = NPC_ROLE_HAULER;
+        }
+    }
+    if (best_station < 0) return false;
+    int slot = spawn_npc(w, best_station, best_role);
+    return slot >= 0;
+}
+
 void rebuild_characters_from_npcs(world_t *w) {
     /* Free heap-allocated manifests on all ships[] slots before we
      * deactivate the characters that pinned them. Without this, slots
@@ -1161,7 +1226,21 @@ static void step_tow_drone(world_t *w, npc_ship_t *npc, int n, float dt) {
     }
 }
 
+/* Cooldown between auto-respawn attempts. 15 s feels recoverable
+ * (full chain-wipe of 7 NPCs comes back over ~100 s) without making
+ * the rocks-vs-NPC PvP feature feel toothless. */
+#define NPC_RESPAWN_INTERVAL 15.0f
+
 void step_npc_ships(world_t *w, float dt) {
+    /* Replenish dead haulers/miners on a slow drip. The first call
+     * after world_reset waits the full interval so the seeded roster
+     * isn't immediately doubled. */
+    if (w->npc_respawn_timer <= 0.0f) w->npc_respawn_timer = NPC_RESPAWN_INTERVAL;
+    w->npc_respawn_timer -= dt;
+    if (w->npc_respawn_timer <= 0.0f) {
+        w->npc_respawn_timer = NPC_RESPAWN_INTERVAL;
+        (void)replenish_npc_roster(w);
+    }
     for (int n = 0; n < MAX_NPC_SHIPS; n++) {
         npc_ship_t *npc = &w->npc_ships[n];
         if (!npc->active) continue;
