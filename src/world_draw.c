@@ -2229,36 +2229,49 @@ void draw_damage_fx(void) {
     }
 }
 
-/* Red border vignette pulsed when the local player takes damage. Inner
- * 60 % of the screen stays clear; only the outer ring tints, so the
- * HUD readouts in the corners aren't washed out. */
+/* Red edge vignette pulsed when the local player takes damage. Each
+ * of the four screen edges gets a thin band whose alpha fades from
+ * full at the screen edge to zero at the inset boundary — a soft
+ * gradient, not a hard ring. The center stays completely clear so HUD
+ * readouts read normally. Per-vertex alpha is the trick that makes
+ * this look like a vignette instead of a solid square: sokol_gl
+ * interpolates color across the quad. */
 void draw_damage_flash(float screen_w, float screen_h) {
     if (g.damage_flash_timer <= 0.0f) return;
-    /* Linear fade — timer was set to 0.4s on damage. Square the alpha
-     * so the early frames hit hard then ease out. */
+    /* Squared decay so the first frames hit hard and the tail eases
+     * out. Cap peak alpha low so combat strobing doesn't blind. */
     float t = g.damage_flash_timer / 0.4f;
     if (t > 1.0f) t = 1.0f;
-    float alpha = t * t * 0.55f;
+    float a = t * t * 0.40f;
 
-    /* Border ring: four trapezoids around an inset rect. */
-    float ix = screen_w * 0.20f;
-    float iy = screen_h * 0.20f;
-    float ix2 = screen_w - ix;
-    float iy2 = screen_h - iy;
+    /* Band thickness: ~12 % of the smaller screen dimension. Thicker
+     * looks oppressive, thinner looks like a UI bug. */
+    float band = fminf(screen_w, screen_h) * 0.12f;
+    float r = 0.95f, g_ = 0.18f, b = 0.18f;
+
     sgl_begin_quads();
-    sgl_c4f(0.95f, 0.18f, 0.18f, alpha);
-    /* top */
-    sgl_v2f(0.0f, 0.0f);     sgl_v2f(screen_w, 0.0f);
-    sgl_v2f(ix2,  iy);       sgl_v2f(ix,   iy);
-    /* bottom */
-    sgl_v2f(ix,   iy2);      sgl_v2f(ix2,  iy2);
-    sgl_v2f(screen_w, screen_h); sgl_v2f(0.0f, screen_h);
-    /* left */
-    sgl_v2f(0.0f, 0.0f);     sgl_v2f(ix,   iy);
-    sgl_v2f(ix,   iy2);      sgl_v2f(0.0f, screen_h);
-    /* right */
-    sgl_v2f(ix2,  iy);       sgl_v2f(screen_w, 0.0f);
-    sgl_v2f(screen_w, screen_h); sgl_v2f(ix2,  iy2);
+    /* TOP edge: y=0 (full alpha) -> y=band (alpha 0). Width spans full
+     * screen so corners blend with side bands. */
+    sgl_c4f(r, g_, b, a); sgl_v2f(0.0f,     0.0f);
+    sgl_c4f(r, g_, b, a); sgl_v2f(screen_w, 0.0f);
+    sgl_c4f(r, g_, b, 0); sgl_v2f(screen_w, band);
+    sgl_c4f(r, g_, b, 0); sgl_v2f(0.0f,     band);
+    /* BOTTOM edge: y=screen_h-band (alpha 0) -> y=screen_h (full). */
+    sgl_c4f(r, g_, b, 0); sgl_v2f(0.0f,     screen_h - band);
+    sgl_c4f(r, g_, b, 0); sgl_v2f(screen_w, screen_h - band);
+    sgl_c4f(r, g_, b, a); sgl_v2f(screen_w, screen_h);
+    sgl_c4f(r, g_, b, a); sgl_v2f(0.0f,     screen_h);
+    /* LEFT edge: x=0 (full) -> x=band (alpha 0). Restricted to the
+     * middle band so it doesn't double up with top/bottom corners. */
+    sgl_c4f(r, g_, b, a); sgl_v2f(0.0f, band);
+    sgl_c4f(r, g_, b, 0); sgl_v2f(band, band);
+    sgl_c4f(r, g_, b, 0); sgl_v2f(band, screen_h - band);
+    sgl_c4f(r, g_, b, a); sgl_v2f(0.0f, screen_h - band);
+    /* RIGHT edge: x=screen_w-band (alpha 0) -> x=screen_w (full). */
+    sgl_c4f(r, g_, b, 0); sgl_v2f(screen_w - band, band);
+    sgl_c4f(r, g_, b, a); sgl_v2f(screen_w,        band);
+    sgl_c4f(r, g_, b, a); sgl_v2f(screen_w,        screen_h - band);
+    sgl_c4f(r, g_, b, 0); sgl_v2f(screen_w - band, screen_h - band);
     sgl_end();
 }
 
