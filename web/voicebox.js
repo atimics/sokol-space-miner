@@ -23,6 +23,12 @@ window.voicebox = (function() {
       state.openRouterKey = savedKey;
       console.log('[voicebox] Loaded persisted OpenRouter key');
     }
+    // Load persisted model selection
+    const savedModel = localStorage.getItem('voicebox_selected_model');
+    if (savedModel) {
+      state.selectedModel = savedModel;
+      console.log(`[voicebox] Loaded persisted model: ${savedModel}`);
+    }
   }
 
   function event(persona, line) {
@@ -121,6 +127,36 @@ window.voicebox = (function() {
     state.initialized = false;
   }
 
+  async function getAvailableModels() {
+    // Fetch available models from OpenRouter
+    // Free models are sufficient for the game
+    if (!state.openRouterKey) {
+      console.log('[voicebox] No OpenRouter key; returning default model');
+      return [{ id: 'openrouter/auto', name: 'Auto (Free)' }];
+    }
+    try {
+      const response = await fetch('https://openrouter.io/api/v1/models', {
+        headers: { 'Authorization': `Bearer ${state.openRouterKey}` }
+      });
+      if (!response.ok) throw new Error(`Failed to fetch models: ${response.status}`);
+      const data = await response.json();
+      return (data.data || []).map(m => ({
+        id: m.id,
+        name: `${m.name || m.id}${m.pricing?.prompt ? ' (paid)' : ' (free)'}`
+      }));
+    } catch (err) {
+      console.error(`[voicebox] Failed to fetch available models: ${err}`);
+      return [{ id: 'openrouter/auto', name: 'Auto (Free)' }];
+    }
+  }
+
+  function setModel(modelId) {
+    if (!modelId) return;
+    state.selectedModel = modelId;
+    localStorage.setItem('voicebox_selected_model', modelId);
+    console.log(`[voicebox] Model set to ${modelId}`);
+  }
+
   // Public API
   return {
     init,
@@ -129,12 +165,13 @@ window.voicebox = (function() {
     ask,
     setMicEnabled,
     quit,
-    // For debugging/testing
     setOpenRouterKey: function(key) {
       state.openRouterKey = key;
       localStorage.setItem('voicebox_openrouter_key', key);
       console.log('[voicebox] OpenRouter key set');
     },
+    setModel,
+    getAvailableModels,
     getState: function() {
       return { ...state };
     },
