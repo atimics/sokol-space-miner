@@ -941,6 +941,64 @@ static void draw_verbs_view(const station_ui_state_t *ui,
         draw_row_lr(cx, my, inner_right, COL_TEXT, "cargo", COL_TEXT, right_buf);
         my += row_h;
 
+        /* Grade-tinted cargo fill bar — segments are sized by manifest
+         * volume, colored per grade. Common-grade swallows any cargo[]
+         * float not represented by a manifest unit (e.g. fractional
+         * leftovers). */
+        {
+            float cap_v = ship_cargo_capacity(ship);
+            if (cap_v > 0.0f) {
+                float bar_x  = cx + 8.0f;
+                float bar_w  = inner_right - bar_x - 8.0f;
+                float bar_h  = 4.0f;
+                float bar_y  = my - 4.0f;
+
+                /* Background */
+                sgl_begin_quads();
+                sgl_c4f(0.10f, 0.10f, 0.12f, 0.85f);
+                sgl_v2f(bar_x, bar_y);
+                sgl_v2f(bar_x + bar_w, bar_y);
+                sgl_v2f(bar_x + bar_w, bar_y + bar_h);
+                sgl_v2f(bar_x, bar_y + bar_h);
+                sgl_end();
+
+                /* Volume per grade. */
+                float vol_by_grade[MINING_GRADE_COUNT] = {0};
+                float manifest_vol = 0.0f;
+                for (uint16_t u = 0; u < ship->manifest.count; u++) {
+                    const cargo_unit_t *cu = &ship->manifest.units[u];
+                    float vol = commodity_volume((commodity_t)cu->commodity);
+                    int gi = cu->grade;
+                    if (gi < 0 || gi >= MINING_GRADE_COUNT) gi = MINING_GRADE_COMMON;
+                    vol_by_grade[gi] += vol;
+                    manifest_vol     += vol;
+                }
+                float total_vol = ship_total_cargo(ship);
+                float remainder = total_vol - manifest_vol;
+                if (remainder > 0.001f) vol_by_grade[MINING_GRADE_COMMON] += remainder;
+
+                /* Segments. Walk grade order so rare/RATi sit on the right. */
+                float x = bar_x;
+                sgl_begin_quads();
+                for (int gi = 0; gi < MINING_GRADE_COUNT; gi++) {
+                    if (vol_by_grade[gi] < 0.001f) continue;
+                    uint8_t cr, cg, cb;
+                    mining_grade_rgb((mining_grade_t)gi, &cr, &cg, &cb);
+                    float seg_w = bar_w * (vol_by_grade[gi] / cap_v);
+                    if (seg_w < 0.0f) seg_w = 0.0f;
+                    if (x + seg_w > bar_x + bar_w) seg_w = (bar_x + bar_w) - x;
+                    sgl_c4f(cr / 255.0f, cg / 255.0f, cb / 255.0f, 0.95f);
+                    sgl_v2f(x, bar_y);
+                    sgl_v2f(x + seg_w, bar_y);
+                    sgl_v2f(x + seg_w, bar_y + bar_h);
+                    sgl_v2f(x, bar_y + bar_h);
+                    x += seg_w;
+                }
+                sgl_end();
+                my += bar_h + 4.0f;
+            }
+        }
+
         snprintf(right_buf, sizeof(right_buf), "LSR %d  HLD %d  TRC %d",
                  ship->mining_level, ship->hold_level, ship->tractor_level);
         draw_row_lr(cx, my, inner_right, COL_TEXT, "modules", COL_TEXT, right_buf);
