@@ -745,7 +745,7 @@ static void draw_trade_view(const station_ui_state_t *ui,
 {
     const station_t *st = ui->station;
     const ship_t *ship = &LOCAL_PLAYER.ship;
-    float row_h = compact ? 13.0f : 15.0f;
+    float row_h = compact ? 14.0f : 15.0f;
     float inner_right = cx + inner_w - 36.0f;
     float my = cy;
     const uint8_t COL_GAIN[3]  = { 130, 230, 150 };  /* + sell: green */
@@ -981,7 +981,7 @@ static void draw_verbs_view(const station_ui_state_t *ui,
 {
     const station_t *st = ui->station;
     const ship_t *ship = &LOCAL_PLAYER.ship;
-    float row_h = compact ? 13.0f : 15.0f;
+    float row_h = compact ? 14.0f : 15.0f;
     float inner_right = cx + inner_w - 36.0f;
     float my = cy;
 
@@ -1030,7 +1030,7 @@ static void draw_verbs_view(const station_ui_state_t *ui,
                  (int)lroundf(ship_total_cargo(ship)),
                  (int)lroundf(ship_cargo_capacity(ship)));
         draw_row_lr(cx, my, inner_right, COL_TEXT, "cargo", COL_TEXT, right_buf);
-        my += row_h;
+        my += row_h - 2.0f; /* tighten gap so the bar sits closer to the cargo numbers */
         /* Grade-tinted cargo fill bar -- gets its own narrow strip
          * under the cargo row so the bar isn't squished into the
          * text descenders. Segments are sized by manifest unit
@@ -1100,37 +1100,27 @@ static void draw_verbs_view(const station_ui_state_t *ui,
     /* -------- SERVICES (always visible; rows always show their status) -------- */
     my += draw_section_header(cx, my, inner_right, "SERVICES", HDR_SERVICE);
 
-    /* [R] repair hull — same grammar as the upgrade rows:
-     *   kits [ have / need ]  -N cr
-     * "have" = ship cargo + dock inventory; "need" = HP missing (1
-     * kit per HP). Append the credit cost when actionable. */
+    /* [R] repair hull -- terse right-hand status: either a credit
+     * cost or a single short reason. Detail belongs in tooltips, not
+     * the row itself. */
     {
         const uint8_t *left_rgb = COL_AMBER;
-        char right_buf[64];
+        char right_buf[32];
         int kits_avail = ui->ship_kits + ui->station_kits;
-        int kits_needed = ui->hull_max - ui->hull_now;
-        if (kits_needed < 0) kits_needed = 0;
         if (ui->hull_now >= ui->hull_max) {
             left_rgb = COL_DIM;
-            snprintf(right_buf, sizeof(right_buf), "kits [ %d / 0 ]",
-                     kits_avail);
+            snprintf(right_buf, sizeof(right_buf), "full hull");
         } else if (kits_avail <= 0) {
             left_rgb = COL_DIM;
             snprintf(right_buf, sizeof(right_buf), "no kits available");
-        } else if (ui->can_repair && ui->repair_cost > 0) {
-            snprintf(right_buf, sizeof(right_buf), "kits [ %d / %d ]  -%d cr",
-                     kits_avail, kits_needed, ui->repair_cost);
         } else if (ui->can_repair) {
-            snprintf(right_buf, sizeof(right_buf), "kits [ %d / %d ]",
-                     kits_avail, kits_needed);
+            snprintf(right_buf, sizeof(right_buf), "%d cr", ui->repair_cost);
         } else if (ui->repair_cost > 0) {
-            /* Affordability blocks; module supply is fine. */
             left_rgb = COL_DIM;
-            snprintf(right_buf, sizeof(right_buf), "kits [ %d / %d ]  need %d cr",
-                     kits_avail, kits_needed, ui->repair_cost);
+            snprintf(right_buf, sizeof(right_buf), "need %d cr", ui->repair_cost);
         } else {
             left_rgb = COL_DIM;
-            snprintf(right_buf, sizeof(right_buf), "unavailable here");
+            snprintf(right_buf, sizeof(right_buf), "unavailable");
         }
         draw_row_lr(cx, my, inner_right, left_rgb, "[R] repair hull",
                     (left_rgb == COL_AMBER) ? COL_TEXT : COL_FADED, right_buf);
@@ -1162,31 +1152,23 @@ static void draw_verbs_view(const station_ui_state_t *ui,
     };
     for (int i = 0; i < 3; i++) {
         const uint8_t *left_rgb = COL_NAV;
-        char right_buf[80];
+        char right_buf[32];
         int avail  = refit[i].in_cargo + refit[i].at_station;
-        int needed = refit[i].needed;
         const char *plural = refit[i].unit_plural;
         if (refit[i].maxed) {
             left_rgb = COL_DIM;
             snprintf(right_buf, sizeof(right_buf), "maxed");
         } else if (avail <= 0) {
-            /* Mirrors the [R] repair-hull row: nothing in cargo or at
-             * the dock, no way to install. */
             left_rgb = COL_DIM;
             snprintf(right_buf, sizeof(right_buf), "no %s available", plural);
+        } else if (refit[i].can) {
+            snprintf(right_buf, sizeof(right_buf), "%d cr", refit[i].credit);
         } else {
-            if (!refit[i].can) left_rgb = COL_DIM;
-            /* Always: "<plural> [ have / need ]". If the row is
-             * actionable AND the dock is filling some of the gap from
-             * its inventory, append the credit cost the player will pay
-             * at retail. */
-            if (refit[i].can && refit[i].credit > 0) {
-                snprintf(right_buf, sizeof(right_buf), "%s [ %d / %d ]  -%d cr",
-                         plural, avail, needed,
-                         refit[i].credit);
+            left_rgb = COL_DIM;
+            if (refit[i].credit > 0) {
+                snprintf(right_buf, sizeof(right_buf), "need %d cr", refit[i].credit);
             } else {
-                snprintf(right_buf, sizeof(right_buf), "%s [ %d / %d ]",
-                         plural, avail, needed);
+                snprintf(right_buf, sizeof(right_buf), "unavailable");
             }
         }
         draw_row_lr(cx, my, inner_right, left_rgb, refit[i].left,
@@ -1208,7 +1190,7 @@ static void draw_jobs_view(const station_ui_state_t *ui,
 {
     (void)compact;
     (void)inner_w;
-    float row_h = compact ? 13.0f : 15.0f;
+    float row_h = compact ? 14.0f : 15.0f;
     float inner_right = cx + inner_w - 36.0f;
     float my = cy;
 
@@ -1394,7 +1376,7 @@ static void draw_yard_view(const station_ui_state_t *ui,
     float my = cy;
 
     if (!station_has_module(st, MODULE_SHIPYARD)) {
-        float row_h = compact ? 13.0f : 15.0f;
+        float row_h = compact ? 14.0f : 15.0f;
         sdtx_color3b(PAL_SHIPYARD_HINT);
         sdtx_pos(ui_text_pos(cx), ui_text_pos(my));
         sdtx_puts("No shipyard installed at this station.");

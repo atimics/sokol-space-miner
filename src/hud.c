@@ -1200,8 +1200,10 @@ void draw_hud_panels(void) {
         /* Ship status strip -- persistent labeled ship state.
          * Layout: "HULL" label, hull meter, "HULL N/N", gap, "CARGO" label,
          * cargo meter, "CARGO N/N", then "LSR N HLD N TRC N" on the right.
-         * Pip rows replaced by inline text chips to match the terminal voice. */
-        {
+         * Skipped in compact mode -- the SHIP BAY tab already surfaces
+         * hull/cargo/modules and the strip would otherwise collide with
+         * the bottom of the SERVICES rows. */
+        if (!compact) {
             float strip_y = panel_y + panel_h - (compact ? 32.0f : 38.0f);
             float label_y = strip_y + 6.0f;     /* text baseline inside strip */
             float meter_y = strip_y + 10.0f;    /* meter top */
