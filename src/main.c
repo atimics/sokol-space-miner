@@ -451,11 +451,8 @@ static void sim_on_upgrade(const sim_event_t *ev) {
         int station = ev->upgrade.station;
         if (station >= 0 && station < 3) {
             const char *station_persona[] = {"prospect", "kepler", "helios"};
-            const char *upgrade_name = "upgrade";
-            if (ev->upgrade.upgrade >= 0 && ev->upgrade.upgrade < UPGRADE_HULL_COUNT)
-                upgrade_name = UPGRADE_NAMES[ev->upgrade.upgrade];
             char msg[80];
-            snprintf(msg, sizeof(msg), "Upgrade applied: %s.", upgrade_name);
+            snprintf(msg, sizeof(msg), "Hull upgrade applied.");
             voice_event(station_persona[station], msg);
         }
     }
