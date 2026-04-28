@@ -50,6 +50,36 @@ else()
     message(STATUS "[SIGNAL_VOICE] Kokoro models already present at ${KOKORO_DIR}")
 endif()
 
+# --- Whisper-Tiny.en STT Model (~75 MB) ---
+set(WHISPER_URL "https://huggingface.co/openai/whisper-tiny.en/resolve/main/model.safetensors")
+set(WHISPER_DIR "${VOICE_ASSETS_DIR}/whisper")
+set(WHISPER_MODEL "${WHISPER_DIR}/model.safetensors")
+set(WHISPER_MARKER "${WHISPER_DIR}/.fetched")
+
+if(NOT EXISTS "${WHISPER_MARKER}")
+    message(STATUS "[SIGNAL_VOICE] Fetching Whisper STT model...")
+
+    # Create whisper dir
+    file(MAKE_DIRECTORY "${WHISPER_DIR}")
+
+    # Download if not already cached
+    if(NOT EXISTS "${WHISPER_MODEL}")
+        message(STATUS "[SIGNAL_VOICE] Downloading Whisper from ${WHISPER_URL}")
+        file(DOWNLOAD
+            "${WHISPER_URL}"
+            "${WHISPER_MODEL}"
+            SHOW_PROGRESS
+            TIMEOUT 600
+        )
+    endif()
+
+    # Mark as fetched
+    file(WRITE "${WHISPER_MARKER}" "fetched at ${CMAKE_CURRENT_LIST_FILE}\n")
+    message(STATUS "[SIGNAL_VOICE] Whisper model ready at ${WHISPER_DIR}")
+else()
+    message(STATUS "[SIGNAL_VOICE] Whisper model already present at ${WHISPER_DIR}")
+endif()
+
 # --- Voicebox Binary ---
 # The voicebox binary needs to be obtained separately:
 # 1. Build from cenetex/voicebox source (preferred if no prebuilt available)
