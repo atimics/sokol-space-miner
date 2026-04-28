@@ -745,7 +745,7 @@ static void draw_trade_view(const station_ui_state_t *ui,
 {
     const station_t *st = ui->station;
     const ship_t *ship = &LOCAL_PLAYER.ship;
-    float row_h = compact ? 15.0f : 16.0f;
+    float row_h = compact ? 13.0f : 15.0f;
     float inner_right = cx + inner_w - 36.0f;
     float my = cy;
     const uint8_t COL_GAIN[3]  = { 130, 230, 150 };  /* + sell: green */
@@ -954,8 +954,6 @@ static void draw_trade_view(const station_ui_state_t *ui,
             draw_row_lr(cx + 32.0f, my, inner_right,
                         info_rgb, status_buf, row_rgb, total_buf);
             my += row_h;
-            /* Inter-row gap so two-line rows don't blur together. */
-            my += 4.0f;
         } else {
             cell_t row[] = {
                 {  0, key_buf,                            row_rgb },
@@ -983,7 +981,7 @@ static void draw_verbs_view(const station_ui_state_t *ui,
 {
     const station_t *st = ui->station;
     const ship_t *ship = &LOCAL_PLAYER.ship;
-    float row_h = compact ? 15.0f : 16.0f;
+    float row_h = compact ? 13.0f : 15.0f;
     float inner_right = cx + inner_w - 36.0f;
     float my = cy;
 
@@ -1032,18 +1030,19 @@ static void draw_verbs_view(const station_ui_state_t *ui,
                  (int)lroundf(ship_total_cargo(ship)),
                  (int)lroundf(ship_cargo_capacity(ship)));
         draw_row_lr(cx, my, inner_right, COL_TEXT, "cargo", COL_TEXT, right_buf);
-        /* Grade-tinted cargo fill bar -- sits inside the cargo row, just
-         * below the text baseline so it visually belongs to that row.
-         * Segments are sized by manifest unit volume and colored per
-         * grade; common-grade swallows any cargo[] float not represented
-         * by a manifest unit (e.g. fractional leftovers). */
+        my += row_h;
+        /* Grade-tinted cargo fill bar -- gets its own narrow strip
+         * under the cargo row so the bar isn't squished into the
+         * text descenders. Segments are sized by manifest unit
+         * volume and colored per grade; common-grade swallows any
+         * cargo[] float not represented by a manifest unit. */
         {
             float cap_v = ship_cargo_capacity(ship);
             if (cap_v > 0.0f) {
                 float bar_x  = cx + 8.0f;
                 float bar_w  = inner_right - bar_x - 8.0f;
-                float bar_h  = 3.0f;
-                float bar_y  = my + row_h - bar_h - 2.0f;
+                float bar_h  = 4.0f;
+                float bar_y  = my;
 
                 /* Background */
                 sgl_begin_quads();
@@ -1087,9 +1086,9 @@ static void draw_verbs_view(const station_ui_state_t *ui,
                     x += seg_w;
                 }
                 sgl_end();
+                my += bar_h + 3.0f;
             }
         }
-        my += row_h;
 
         snprintf(right_buf, sizeof(right_buf), "LSR %d  HLD %d  TRC %d",
                  ship->mining_level, ship->hold_level, ship->tractor_level);
@@ -1209,7 +1208,7 @@ static void draw_jobs_view(const station_ui_state_t *ui,
 {
     (void)compact;
     (void)inner_w;
-    float row_h = compact ? 15.0f : 16.0f;
+    float row_h = compact ? 13.0f : 15.0f;
     float inner_right = cx + inner_w - 36.0f;
     float my = cy;
 
@@ -1369,10 +1368,6 @@ static void draw_jobs_view(const station_ui_state_t *ui,
             };
             draw_row_cells(cx, my, bot, 1);
             my += row_h;
-            /* Group separator between multi-line rows. Without it the
-             * pay line of row N hugs the key line of row N+1 visually
-             * because they share the same row_h spacing. */
-            my += 4.0f;
         } else {
             cell_t row[] = {
                 {  0, key_buf,   row_rgb },
@@ -1399,7 +1394,7 @@ static void draw_yard_view(const station_ui_state_t *ui,
     float my = cy;
 
     if (!station_has_module(st, MODULE_SHIPYARD)) {
-        float row_h = compact ? 15.0f : 16.0f;
+        float row_h = compact ? 13.0f : 15.0f;
         sdtx_color3b(PAL_SHIPYARD_HINT);
         sdtx_pos(ui_text_pos(cx), ui_text_pos(my));
         sdtx_puts("No shipyard installed at this station.");
