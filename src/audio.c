@@ -1,10 +1,15 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include "audio.h"
 #include "sokol_audio.h"
 #include "sokol_log.h"
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 #ifdef SIGNAL_VOICE
 #include "voice.h"
