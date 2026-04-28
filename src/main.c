@@ -687,6 +687,9 @@ static void sim_on_module_activated(const sim_event_t *ev) {
 }
 
 static void sim_on_outpost_activated(const sim_event_t *ev) {
+#ifndef SIGNAL_VOICE
+    (void)ev;
+#endif
     if (!g.episode.watched[4]) episode_trigger(&g.episode, 4); /* Ep 4: Naming */
     audio_play_commission(&g.audio);
 #ifdef SIGNAL_VOICE
