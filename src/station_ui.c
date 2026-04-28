@@ -997,19 +997,18 @@ static void draw_verbs_view(const station_ui_state_t *ui,
                  (int)lroundf(ship_total_cargo(ship)),
                  (int)lroundf(ship_cargo_capacity(ship)));
         draw_row_lr(cx, my, inner_right, COL_TEXT, "cargo", COL_TEXT, right_buf);
-        my += row_h;
-
-        /* Grade-tinted cargo fill bar — segments are sized by manifest
-         * volume, colored per grade. Common-grade swallows any cargo[]
-         * float not represented by a manifest unit (e.g. fractional
-         * leftovers). */
+        /* Grade-tinted cargo fill bar -- sits inside the cargo row, just
+         * below the text baseline so it visually belongs to that row.
+         * Segments are sized by manifest unit volume and colored per
+         * grade; common-grade swallows any cargo[] float not represented
+         * by a manifest unit (e.g. fractional leftovers). */
         {
             float cap_v = ship_cargo_capacity(ship);
             if (cap_v > 0.0f) {
                 float bar_x  = cx + 8.0f;
                 float bar_w  = inner_right - bar_x - 8.0f;
-                float bar_h  = 4.0f;
-                float bar_y  = my - 4.0f;
+                float bar_h  = 3.0f;
+                float bar_y  = my + row_h - bar_h - 2.0f;
 
                 /* Background */
                 sgl_begin_quads();
@@ -1053,9 +1052,9 @@ static void draw_verbs_view(const station_ui_state_t *ui,
                     x += seg_w;
                 }
                 sgl_end();
-                my += bar_h + 4.0f;
             }
         }
+        my += row_h;
 
         snprintf(right_buf, sizeof(right_buf), "LSR %d  HLD %d  TRC %d",
                  ship->mining_level, ship->hold_level, ship->tractor_level);
