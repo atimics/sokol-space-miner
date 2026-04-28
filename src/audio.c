@@ -103,7 +103,8 @@ void audio_step(audio_state_t* a, float dt) {
     }
 }
 
-/* Ring buffer utilities for voice PCM */
+/* Ring buffer utilities for voice PCM. Always defined — the ring is
+   always zero-init, so on OFF builds these return 0 and no I/O happens. */
 static int audio_voice_ring_available(audio_state_t* a) {
     audio_voice_pcm_t* v = &a->voice_pcm;
     if (v->write_pos >= v->read_pos) {
@@ -113,9 +114,11 @@ static int audio_voice_ring_available(audio_state_t* a) {
     }
 }
 
+#ifdef SIGNAL_VOICE
 static int audio_voice_ring_space(audio_state_t* a) {
     return AUDIO_VOICE_RING_FRAMES - audio_voice_ring_available(a) - 1;
 }
+#endif
 
 /* Resample a single voice PCM frame from voice_rate to output_rate.
  * Uses linear interpolation. */
@@ -140,7 +143,9 @@ static float audio_resample_voice(audio_state_t* a, float* resample_phase) {
 
 /* Read pending PCM frames from voicebox pipe. Non-blocking, drops data if no space. */
 static void audio_voice_pcm_pull(audio_state_t* a) {
-#ifdef SIGNAL_VOICE
+#ifndef SIGNAL_VOICE
+    (void)a;
+#else
     audio_voice_pcm_t* v = &a->voice_pcm;
     int space = audio_voice_ring_space(a);
     if (space < 1024) return; /* not enough buffered space */
