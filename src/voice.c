@@ -135,12 +135,42 @@ void voice_mic_enable(bool enabled) {
     if (g_voice.stdin_fd == -1) return;
 
     const char *cmd = enabled ? "MIC 1\n" : "MIC 0\n";
-    int len = enabled ? 6 : 6;
+    int len = 6;
 
 #ifdef _WIN32
     _write(g_voice.stdin_fd, cmd, len);
 #else
     ssize_t written = write(g_voice.stdin_fd, cmd, (size_t)len);
+    (void)written;
+#endif
+}
+
+void voice_state(const char *fields) {
+    if (g_voice.stdin_fd == -1 || !fields) return;
+
+    char buf[512];
+    int len = snprintf(buf, sizeof(buf), "STATE %s\n", fields);
+    if (len < 0 || len >= (int)sizeof(buf)) return;
+
+#ifdef _WIN32
+    _write(g_voice.stdin_fd, buf, len);
+#else
+    ssize_t written = write(g_voice.stdin_fd, buf, (size_t)len);
+    (void)written;
+#endif
+}
+
+void voice_ask(const char *persona, const char *directive) {
+    if (g_voice.stdin_fd == -1 || !persona || !directive) return;
+
+    char buf[512];
+    int len = snprintf(buf, sizeof(buf), "ASK %s %s\n", persona, directive);
+    if (len < 0 || len >= (int)sizeof(buf)) return;
+
+#ifdef _WIN32
+    _write(g_voice.stdin_fd, buf, len);
+#else
+    ssize_t written = write(g_voice.stdin_fd, buf, (size_t)len);
     (void)written;
 #endif
 }

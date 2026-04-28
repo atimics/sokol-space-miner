@@ -800,7 +800,7 @@ static void sample_autopilot(input_intent_t *intent) {
 static void sample_voice_mic(void) {
 #ifdef SIGNAL_VOICE
     bool docked = LOCAL_PLAYER.docked;
-    bool in_episode = (g.world.episode_current >= 0 && g.world.episode_current < MAX_EPISODES);
+    bool in_episode = episode_is_active(&g.episode);
 
     if (docked || in_episode) return; /* mic disabled while docked or in cutscenes */
 
