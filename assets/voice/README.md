@@ -16,7 +16,12 @@ When building with `cmake -DSIGNAL_VOICE=ON`:
    - `kepler.persona` — Kepler Yard
    - `helios.persona` — Helios Works
 
-3. **Voicebox binary** (`voicebox` or `voicebox.exe`) must be obtained separately:
+3. **Whisper STT model** (`whisper/`) is automatically downloaded from k2-fsa/sherpa-onnx releases
+   - ~75 MB tarball containing ONNX-converted encoder, decoder, tokens, and VAD
+   - Enables pilot mic input (speech-to-text recognition)
+   - Cached to avoid re-downloading on rebuilds
+
+4. **Voicebox binary** (`voicebox` or `voicebox.exe`) must be obtained separately:
    - If not already present, the build will warn you and provide instructions
    - To build from source:
      ```sh
@@ -39,5 +44,6 @@ voicebox --ship \
   --persona-add prospect assets/voice/prospect.persona \
   --persona-add kepler assets/voice/kepler.persona \
   --persona-add helios assets/voice/helios.persona \
-  assets/voice/kokoro
+  assets/voice/kokoro \
+  assets/voice/whisper
 ```

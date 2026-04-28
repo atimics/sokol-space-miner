@@ -1,4 +1,4 @@
-# Fetch and extract voice assets (voicebox binary and Kokoro models)
+# Fetch and extract voice assets (voicebox binary, Kokoro + Whisper models)
 # Only runs if SIGNAL_VOICE is ON
 
 if(NOT SIGNAL_VOICE)
@@ -48,6 +48,50 @@ if(NOT EXISTS "${KOKORO_MARKER}")
     message(STATUS "[SIGNAL_VOICE] Kokoro models ready at ${KOKORO_DIR}")
 else()
     message(STATUS "[SIGNAL_VOICE] Kokoro models already present at ${KOKORO_DIR}")
+endif()
+
+# --- Whisper-Tiny.en STT Model (~75 MB) ---
+# ONNX-converted bundle from sherpa-onnx (encoder + decoder + tokens + VAD)
+set(WHISPER_URL "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2")
+set(WHISPER_DIR "${VOICE_ASSETS_DIR}/whisper")
+set(WHISPER_MARKER "${WHISPER_DIR}/.fetched")
+
+if(NOT EXISTS "${WHISPER_MARKER}")
+    message(STATUS "[SIGNAL_VOICE] Fetching Whisper STT model...")
+
+    # Create whisper dir
+    file(MAKE_DIRECTORY "${VOICE_ASSETS_DIR}")
+    set(WHISPER_TARBALL "${CMAKE_BINARY_DIR}/sherpa-onnx-whisper-tiny.en.tar.bz2")
+
+    # Download if not already cached
+    if(NOT EXISTS "${WHISPER_TARBALL}")
+        message(STATUS "[SIGNAL_VOICE] Downloading Whisper from ${WHISPER_URL}")
+        file(DOWNLOAD
+            "${WHISPER_URL}"
+            "${WHISPER_TARBALL}"
+            SHOW_PROGRESS
+            TIMEOUT 600
+        )
+    endif()
+
+    # Extract to assets/voice/whisper/
+    message(STATUS "[SIGNAL_VOICE] Extracting Whisper to ${WHISPER_DIR}")
+    file(MAKE_DIRECTORY "${WHISPER_DIR}")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E tar xjf "${WHISPER_TARBALL}"
+        WORKING_DIRECTORY "${WHISPER_DIR}"
+        RESULT_VARIABLE EXTRACT_RESULT
+    )
+
+    if(NOT EXTRACT_RESULT EQUAL 0)
+        message(FATAL_ERROR "[SIGNAL_VOICE] Failed to extract Whisper models")
+    endif()
+
+    # Mark as fetched
+    file(WRITE "${WHISPER_MARKER}" "fetched at ${CMAKE_CURRENT_LIST_FILE}\n")
+    message(STATUS "[SIGNAL_VOICE] Whisper model ready at ${WHISPER_DIR}")
+else()
+    message(STATUS "[SIGNAL_VOICE] Whisper model already present at ${WHISPER_DIR}")
 endif()
 
 # --- Voicebox Binary ---
