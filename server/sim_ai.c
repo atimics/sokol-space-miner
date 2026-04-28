@@ -184,43 +184,28 @@ ship_t *world_npc_ship_for(world_t *w, int npc_slot) {
     return npc_ship_for(w, npc_slot);
 }
 
-/* End-of-tick paired-pool sync — npc -> ship for physics fields plus
- * ship -> npc for hull. Slice 13's pre-mirror (mirror_ship_pos_to_npc,
- * called at the top of each NPC step) is what makes external ship.pos
- * /vel/angle writes between ticks survive; after that pull, this
- * end-of-tick mirror just round-trips them back to the ship.
+/* Slice 14: ship_t is now authoritative for physics. Per-tick writes
+ * in sim_ai.c go to ship.pos/vel/angle/thrusting; this end-of-tick
+ * mirror pushes the integrated state down to the npc fields so
+ * external readers (world_draw, save, tests) keep seeing fresh values
+ * until those readers are migrated in 14b/15.
  *
- *   - hull is ship-authoritative since Slice 9/11 (apply_npc_ship_damage,
- *     hauler dock auto-repair both write ship.hull). Push ship -> npc
- *     so the npc-side despawn check reads a fresh value next tick.
- *   - pos / vel / angle / thrusting still get integrated on npc fields
- *     by the existing dispatch; npc -> ship at end of tick keeps the
- *     ship faithful for external readers and parity tests. Slice 14
- *     will collapse this into a single direction once npc_ship_t loses
- *     its physics fields. */
+ *   - hull: ship-authoritative since Slice 9/11.
+ *   - pos / vel / angle / thrusting: now ship-authoritative, written
+ *     directly by the dispatch helpers (npc_steer_*, npc_apply_*,
+ *     resolve_npc_*).
+ *
+ * Reads of npc->pos in OTHER files are 1-tick-stale at most because
+ * the mirror runs after physics integration each tick. */
 static void mirror_ship_to_npc(world_t *w, int npc_slot) {
     ship_t *s = npc_ship_for(w, npc_slot);
     if (!s) return;
     npc_ship_t *npc = &w->npc_ships[npc_slot];
-    npc->hull = s->hull;
-    s->pos = npc->pos;
-    s->vel = npc->vel;
-    s->angle = npc->angle;
-}
-
-/* Slice 13: pre-mirror at the top of each NPC step. Pulls any external
- * ship.pos/vel/angle writes (PvP rock impulse, future autopilot, etc.)
- * into the npc fields BEFORE physics integrates this tick. Without
- * this, the post-mirror at end-of-tick would clobber the external
- * write with the integrated-from-stale-npc value — that was the bug
- * the parity tripwire (Slice 13a) was set up to surface. */
-static void mirror_ship_pos_to_npc(world_t *w, int npc_slot) {
-    ship_t *s = npc_ship_for(w, npc_slot);
-    if (!s) return;
-    npc_ship_t *npc = &w->npc_ships[npc_slot];
-    npc->pos = s->pos;
-    npc->vel = s->vel;
-    npc->angle = s->angle;
+    npc->hull       = s->hull;
+    npc->pos        = s->pos;
+    npc->vel        = s->vel;
+    npc->angle      = s->angle;
+    /* thrusting stays on npc — it's a render flag, not physics. */
 }
 
 /* Apply damage to an NPC with optional kill attribution. The reverse
@@ -558,16 +543,17 @@ static int npc_find_mineable_asteroid(const world_t *w, const npc_ship_t *npc) {
     return -1;
 }
 
-static void npc_steer_toward(npc_ship_t *npc, vec2 target, float accel, float turn_speed, float dt) {
-    vec2 delta = v2_sub(target, npc->pos);
+static void npc_steer_toward(ship_t *ship, npc_ship_t *npc, vec2 target,
+                             float accel, float turn_speed, float dt) {
+    vec2 delta = v2_sub(target, ship->pos);
     float desired = atan2f(delta.y, delta.x);
-    float diff = wrap_angle(desired - npc->angle);
+    float diff = wrap_angle(desired - ship->angle);
     float max_turn = turn_speed * dt;
     if (diff > max_turn) diff = max_turn;
     else if (diff < -max_turn) diff = -max_turn;
-    npc->angle = wrap_angle(npc->angle + diff);
-    vec2 fwd = v2_from_angle(npc->angle);
-    npc->vel = v2_add(npc->vel, v2_scale(fwd, accel * dt));
+    ship->angle = wrap_angle(ship->angle + diff);
+    vec2 fwd = v2_from_angle(ship->angle);
+    ship->vel = v2_add(ship->vel, v2_scale(fwd, accel * dt));
     npc->thrusting = accel > 0.0f;
 }
 
@@ -581,6 +567,9 @@ static void npc_steer_toward(npc_ship_t *npc, vec2 target, float accel, float tu
  * mutations land on the npc via npc_apply_flight_cmd, not on the view.
  * Goes away in the slice that embeds ship_t inside npc_ship_t. */
 static ship_t ship_view_from_npc(const npc_ship_t *npc) {
+    /* Slice 14: kept as a thin wrapper for non-paired callers (tests,
+     * pre-character-pool helpers). Live NPCs should pass their paired
+     * ship_t directly via npc_ship_for(). */
     ship_t v = {0};
     v.pos = npc->pos;
     v.vel = npc->vel;
@@ -593,79 +582,80 @@ static ship_t ship_view_from_npc(const npc_ship_t *npc) {
  * Rate-limits turn by turn_speed; gates thrust to forward acceleration only.
  * Caller owns physics integration (npc_apply_physics) and any thrust<0
  * handling (e.g. hover-specific brake-away-from-target). */
-static void npc_apply_flight_cmd(npc_ship_t *npc, flight_cmd_t cmd,
+static void npc_apply_flight_cmd(ship_t *ship, npc_ship_t *npc, flight_cmd_t cmd,
                                   float accel, float turn_speed, float dt) {
     float max_turn = turn_speed * dt;
     float turn_angle = cmd.turn * turn_speed * dt;
     if (turn_angle > max_turn) turn_angle = max_turn;
     if (turn_angle < -max_turn) turn_angle = -max_turn;
-    npc->angle = wrap_angle(npc->angle + turn_angle);
+    ship->angle = wrap_angle(ship->angle + turn_angle);
 
     float thrust_gate = (cmd.thrust > 0.0f) ? cmd.thrust : 0.0f;
-    vec2 fwd = v2_from_angle(npc->angle);
-    npc->vel = v2_add(npc->vel, v2_scale(fwd, accel * thrust_gate * dt));
+    vec2 fwd = v2_from_angle(ship->angle);
+    ship->vel = v2_add(ship->vel, v2_scale(fwd, accel * thrust_gate * dt));
     npc->thrusting = thrust_gate > 0.0f;
 }
 
 /* A*-guided NPC steering via the shared flight controller.
  * Creates a temporary ship_t so flight_steer_to can read pos/vel/angle/hull_class.
  * Phase 2 will give NPCs a real ship_t; this is intentionally transitional. */
-static void npc_steer_with_path(const world_t *w, int npc_idx, npc_ship_t *npc,
+static void npc_steer_with_path(world_t *w, int npc_idx, npc_ship_t *npc,
                                 vec2 final_target, float accel, float turn_speed, float dt) {
-    ship_t view = ship_view_from_npc(npc);
+    ship_t *ship = npc_ship_for(w, npc_idx);
+    if (!ship) return;
     nav_path_t *path = nav_npc_path(npc_idx);
-    flight_cmd_t cmd = flight_steer_to(w, &view, path, final_target,
+    flight_cmd_t cmd = flight_steer_to(w, ship, path, final_target,
                                         0.0f, 200.0f, dt);
-    npc_apply_flight_cmd(npc, cmd, accel, turn_speed, dt);
+    npc_apply_flight_cmd(ship, npc, cmd, accel, turn_speed, dt);
 }
 
-static void npc_apply_physics(npc_ship_t *npc, float drag, float dt, const world_t *w) {
-    npc->vel = v2_scale(npc->vel, 1.0f / (1.0f + (drag * dt)));
-    npc->pos = v2_add(npc->pos, v2_scale(npc->vel, dt));
+static void npc_apply_physics(ship_t *ship, float drag, float dt, const world_t *w) {
+    ship->vel = v2_scale(ship->vel, 1.0f / (1.0f + (drag * dt)));
+    ship->pos = v2_add(ship->pos, v2_scale(ship->vel, dt));
     /* Signal-based boundary: NPCs pushed back when confidence is low */
-    float sig = signal_strength_at(w, npc->pos);
+    float sig = signal_strength_at(w, ship->pos);
     float npc_conf = signal_npc_confidence(sig);
     if (npc_conf < 1.0f) {
         float best_d_sq = 1e18f;
         int best_s = 0;
         for (int i = 0; i < MAX_STATIONS; i++) {
-            float d_sq = v2_dist_sq(npc->pos, w->stations[i].pos);
+            float d_sq = v2_dist_sq(ship->pos, w->stations[i].pos);
             if (d_sq < best_d_sq) { best_d_sq = d_sq; best_s = i; }
         }
-        vec2 to_station = v2_sub(w->stations[best_s].pos, npc->pos);
+        vec2 to_station = v2_sub(w->stations[best_s].pos, ship->pos);
         float d = sqrtf(v2_len_sq(to_station));
         if (d > 0.001f) {
             float edge = w->stations[best_s].signal_range;
             float overshoot = fmaxf(0.0f, d - edge);
             float push_strength = overshoot * 0.08f + (1.0f - npc_conf) * 0.05f;
             vec2 push = v2_scale(to_station, push_strength / d);
-            npc->vel = v2_add(npc->vel, push);
+            ship->vel = v2_add(ship->vel, push);
         }
     }
 }
 
 
 /* Push NPC out of a circle (no damage, unlike player collision). */
-static void resolve_npc_circle(npc_ship_t *npc, vec2 center, float radius) {
+static void resolve_npc_circle(ship_t *ship, const npc_ship_t *npc, vec2 center, float radius) {
     const hull_def_t *hull = npc_hull_def(npc);
     float minimum = radius + hull->ship_radius;
-    vec2 delta = v2_sub(npc->pos, center);
+    vec2 delta = v2_sub(ship->pos, center);
     float d_sq = v2_len_sq(delta);
     if (d_sq >= minimum * minimum) return;
     float d = sqrtf(d_sq);
     vec2 normal = d > 0.00001f ? v2_scale(delta, 1.0f / d) : v2(1.0f, 0.0f);
-    npc->pos = v2_add(center, v2_scale(normal, minimum));
-    float vel_toward = v2_dot(npc->vel, normal);
+    ship->pos = v2_add(center, v2_scale(normal, minimum));
+    float vel_toward = v2_dot(ship->vel, normal);
     if (vel_toward < 0.0f)
-        npc->vel = v2_sub(npc->vel, v2_scale(normal, vel_toward * 1.0f));
+        ship->vel = v2_sub(ship->vel, v2_scale(normal, vel_toward * 1.0f));
 }
 
 /* Push NPC out of a corridor annular sector (with angular margin). */
-static void resolve_npc_annular_sector(npc_ship_t *npc, vec2 center,
+static void resolve_npc_annular_sector(ship_t *ship, const npc_ship_t *npc, vec2 center,
                                         float ring_r, float angle_a, float angle_b) {
     const hull_def_t *hull = npc_hull_def(npc);
     float ship_r = hull->ship_radius;
-    vec2 delta = v2_sub(npc->pos, center);
+    vec2 delta = v2_sub(ship->pos, center);
     float dist = sqrtf(v2_len_sq(delta));
     if (dist < 1.0f) return;
 
@@ -688,17 +678,20 @@ static void resolve_npc_annular_sector(npc_ship_t *npc, vec2 center,
     float d_inner = dist - (ring_r - STATION_CORRIDOR_HW);
     float d_outer = (ring_r + STATION_CORRIDOR_HW) - dist;
     if (d_inner < d_outer) {
-        npc->pos = v2_add(center, v2_scale(radial, r_inner));
-        float vt = v2_dot(npc->vel, radial);
-        if (vt > 0.0f) npc->vel = v2_sub(npc->vel, v2_scale(radial, vt * 1.0f));
+        ship->pos = v2_add(center, v2_scale(radial, r_inner));
+        float vt = v2_dot(ship->vel, radial);
+        if (vt > 0.0f) ship->vel = v2_sub(ship->vel, v2_scale(radial, vt * 1.0f));
     } else {
-        npc->pos = v2_add(center, v2_scale(radial, r_outer));
-        float vt = v2_dot(npc->vel, radial);
-        if (vt < 0.0f) npc->vel = v2_sub(npc->vel, v2_scale(radial, vt * 1.0f));
+        ship->pos = v2_add(center, v2_scale(radial, r_outer));
+        float vt = v2_dot(ship->vel, radial);
+        if (vt < 0.0f) ship->vel = v2_sub(ship->vel, v2_scale(radial, vt * 1.0f));
     }
 }
 
 static void npc_resolve_station_collisions(world_t *w, npc_ship_t *npc) {
+    int slot = (int)(npc - w->npc_ships);
+    ship_t *ship = npc_ship_for(w, slot);
+    if (!ship) return;
     const hull_def_t *hull = npc_hull_def(npc);
     float ship_r = hull->ship_radius;
     for (int i = 0; i < MAX_STATIONS; i++) {
@@ -712,12 +705,12 @@ static void npc_resolve_station_collisions(world_t *w, npc_ship_t *npc) {
 
         /* Module circles */
         for (int ci = 0; ci < geom.circle_count; ci++)
-            resolve_npc_circle(npc, geom.circles[ci].center, geom.circles[ci].radius);
+            resolve_npc_circle(ship, npc, geom.circles[ci].center, geom.circles[ci].radius);
 
         /* Near-module suppression + corridor annular sectors
          * (matches player collision logic) */
-        float npc_dist = sqrtf(v2_dist_sq(npc->pos, st->pos));
-        vec2 npc_delta = v2_sub(npc->pos, st->pos);
+        float npc_dist = sqrtf(v2_dist_sq(ship->pos, st->pos));
+        vec2 npc_delta = v2_sub(ship->pos, st->pos);
         float npc_ang = atan2f(npc_delta.y, npc_delta.x);
 
         for (int ci = 0; ci < geom.corridor_count; ci++) {
@@ -738,7 +731,7 @@ static void npc_resolve_station_collisions(world_t *w, npc_ship_t *npc) {
             }
 
             if (!near_module) {
-                resolve_npc_annular_sector(npc, geom.center,
+                resolve_npc_annular_sector(ship, npc, geom.center,
                     ring_r, geom.corridors[ci].angle_a, geom.corridors[ci].angle_b);
             }
         }
@@ -746,24 +739,27 @@ static void npc_resolve_station_collisions(world_t *w, npc_ship_t *npc) {
 }
 
 static void npc_resolve_asteroid_collisions(world_t *w, npc_ship_t *npc) {
+    int slot = (int)(npc - w->npc_ships);
+    ship_t *ship = npc_ship_for(w, slot);
+    if (!ship) return;
     const hull_def_t *hull = npc_hull_def(npc);
     for (int i = 0; i < MAX_ASTEROIDS; i++) {
         asteroid_t *a = &w->asteroids[i];
         if (!a->active || asteroid_is_collectible(a)) continue;
         float minimum = a->radius + hull->ship_radius;
-        vec2 delta = v2_sub(npc->pos, a->pos);
+        vec2 delta = v2_sub(ship->pos, a->pos);
         float d_sq = v2_len_sq(delta);
         if (d_sq >= minimum * minimum) continue;
         float d = sqrtf(d_sq);
         vec2 normal = d > 0.00001f ? v2_scale(delta, 1.0f / d) : v2(1.0f, 0.0f);
-        npc->pos = v2_add(a->pos, v2_scale(normal, minimum));
+        ship->pos = v2_add(a->pos, v2_scale(normal, minimum));
         /* Relative velocity so a stationary NPC hit by a fast rock takes
          * the right impact (matches resolve_ship_asteroid_collision). */
-        vec2 rel_vel = v2_sub(npc->vel, a->vel);
+        vec2 rel_vel = v2_sub(ship->vel, a->vel);
         float vel_toward = v2_dot(rel_vel, normal);
         if (vel_toward < 0.0f) {
             float impact = -vel_toward;
-            npc->vel = v2_sub(npc->vel, v2_scale(normal, vel_toward * 1.0f));
+            ship->vel = v2_sub(ship->vel, v2_scale(normal, vel_toward * 1.0f));
             /* Same formula as players (collision_damage_for in game_sim.h).
              * NPCs feeding the kit-demand sink is the load-bearing reason
              * the kit economy exists at all. */
@@ -821,6 +817,9 @@ static void npc_validate_stations(world_t *w, npc_ship_t *npc) {
 }
 
 static void step_hauler(world_t *w, npc_ship_t *npc, int n, float dt) {
+    /* Slice 14: ship_t is authoritative for physics. */
+    ship_t *ship = npc_ship_for(w, n);
+    if (!ship) return;
     const hull_def_t *hull = npc_hull_def(npc);
     switch (npc->state) {
     case NPC_STATE_DOCKED: {
@@ -1358,9 +1357,6 @@ void step_npc_ships(world_t *w, float dt) {
             continue;
         }
         npc->thrusting = false;
-        /* Slice 13: pull external ship.pos/vel/angle writes into the
-         * npc fields before physics integration this tick. */
-        mirror_ship_pos_to_npc(w, n);
         mirror_npc_to_character(w, n);
         npc_validate_stations(w, npc);
 
@@ -1483,9 +1479,9 @@ void step_npc_ships(world_t *w, float dt) {
                      * keyed off last_towed_token) credits the NPC's
                      * ledger at the home station. Same hook the player
                      * pickup uses — symmetrical economic identity. */
-                    asteroid_t *a = &w->asteroids[best_frag];
-                    memcpy(a->last_towed_token, npc->session_token,
-                           sizeof(a->last_towed_token));
+                    asteroid_t *frag = &w->asteroids[best_frag];
+                    memcpy(frag->last_towed_token, npc->session_token,
+                           sizeof(frag->last_towed_token));
                 }
             }
             break;
