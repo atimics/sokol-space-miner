@@ -84,7 +84,8 @@ TEST(test_signal_verify_byte_tamper) {
     w->stations[0].chain_event_count = 0;
     memset(w->stations[0].chain_last_hash, 0, 32);
 
-    uint8_t pl[8] = "tamper--";
+    uint8_t pl[8];
+    memcpy(pl, "tamper--", 8);
     for (int i = 0; i < 5; i++)
         ASSERT(chain_log_emit(w, &w->stations[0], CHAIN_EVT_LEDGER, pl, sizeof(pl)) == (uint64_t)(i+1));
 
@@ -122,7 +123,8 @@ TEST(test_signal_verify_signature_corruption) {
     w->stations[0].chain_event_count = 0;
     memset(w->stations[0].chain_last_hash, 0, 32);
 
-    uint8_t pl[8] = "sig-test";
+    uint8_t pl[8];
+    memcpy(pl, "sig-test", 8);
     ASSERT(chain_log_emit(w, &w->stations[0], CHAIN_EVT_LEDGER, pl, sizeof(pl)) == 1);
 
     /* Header layout: signature occupies the last 64 bytes of the
@@ -161,7 +163,8 @@ TEST(test_signal_verify_mid_log_splice) {
     w->stations[0].chain_event_count = 0;
     memset(w->stations[0].chain_last_hash, 0, 32);
 
-    uint8_t pl[8] = "splice--";
+    uint8_t pl[8];
+    memcpy(pl, "splice--", 8);
     for (int i = 0; i < 5; i++)
         ASSERT(chain_log_emit(w, &w->stations[0], CHAIN_EVT_LEDGER, pl, sizeof(pl)) == (uint64_t)(i+1));
 
