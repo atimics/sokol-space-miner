@@ -207,7 +207,8 @@ static void spatial_grid_clear(spatial_grid_t *g) {
 static spatial_cell_t *spatial_grid_get_or_create(spatial_grid_t *g, int cx, int cy) {
     spatial_grid_ensure(g);
     if (!g->entries) return NULL; /* OOM — degrade gracefully */
-    uint32_t h = (uint32_t)((cx * 73856093) ^ (cy * 19349663));
+    /* Mul in unsigned space — signed * 73856093 overflows for |cx| > 29 (UB). */
+    uint32_t h = ((uint32_t)cx * 73856093u) ^ ((uint32_t)cy * 19349663u);
     for (uint32_t i = h & g->mask; ; i = (i + 1) & g->mask) {
         sparse_cell_entry_t *e = &g->entries[i];
         if (e->key_x == INT32_MIN) {
