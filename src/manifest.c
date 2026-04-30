@@ -15,7 +15,7 @@ static void assert_finished_invariant(const station_t *st, commodity_t c) {
 #ifndef NDEBUG
     if ((int)c < (int)COMMODITY_RAW_ORE_COUNT) return;
     if ((int)c >= (int)COMMODITY_COUNT) return;
-    assert((int)floorf(st->inventory[c] + 0.0001f) ==
+    assert((int)floorf(st->_inventory_cache[c] + 0.0001f) ==
            manifest_count_by_commodity(&st->manifest, c));
 #endif
 }
@@ -576,12 +576,12 @@ int station_finished_mint(station_t *st, commodity_t c, int n,
          * this mint, frac would be computed as ~0.9999 (not ~0), and the
          * float would jump to manifest_count + 0.9999, breaking the
          * invariant by one whole unit. */
-        float v = st->inventory[c];
+        float v = st->_inventory_cache[c];
         float floor_v = floorf(v + 0.0001f);
         float frac = v - floor_v;
         if (frac < 0.0f) frac = 0.0f;     /* clamp tiny negative residue */
         if (frac >= 1.0f) frac = 0.0f;    /* belt-and-suspenders */
-        st->inventory[c] = (float)manifest_count_by_commodity(&st->manifest, c) + frac;
+        st->_inventory_cache[c] = (float)manifest_count_by_commodity(&st->manifest, c) + frac;
         st->manifest_dirty = true;
     }
     assert_finished_invariant(st, c);
@@ -594,9 +594,9 @@ int station_finished_drain(station_t *st, commodity_t c, int n) {
     if ((int)c >= (int)COMMODITY_COUNT) return 0;
     int drained = manifest_consume_by_commodity(&st->manifest, c, n);
     if (drained > 0) {
-        float frac = st->inventory[c] - floorf(st->inventory[c]);
-        st->inventory[c] = (float)manifest_count_by_commodity(&st->manifest, c) + frac;
-        if (st->inventory[c] < 0.0f) st->inventory[c] = 0.0f;
+        float frac = st->_inventory_cache[c] - floorf(st->_inventory_cache[c]);
+        st->_inventory_cache[c] = (float)manifest_count_by_commodity(&st->manifest, c) + frac;
+        if (st->_inventory_cache[c] < 0.0f) st->_inventory_cache[c] = 0.0f;
         st->manifest_dirty = true;
     }
     assert_finished_invariant(st, c);
@@ -612,7 +612,7 @@ int station_finished_accumulate(station_t *st, commodity_t c, float amount,
     /* Compute how many integer crossings this addition triggers. The
      * float currently holds: (manifest count) + (fractional residue).
      * After adding `amount`, the new int count is floor(old + amount). */
-    float before = st->inventory[c];
+    float before = st->_inventory_cache[c];
     float after  = before + amount;
     int int_before = (int)floorf(before + 0.0001f);
     int int_after  = (int)floorf(after + 0.0001f);
@@ -620,7 +620,7 @@ int station_finished_accumulate(station_t *st, commodity_t c, float amount,
 
     /* Update float first so any partial residue is preserved even if
      * minting partially fails (manifest cap). */
-    st->inventory[c] = after;
+    st->_inventory_cache[c] = after;
 
     if (delta <= 0) {
         assert_finished_invariant(st, c);
