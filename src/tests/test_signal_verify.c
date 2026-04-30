@@ -240,13 +240,7 @@ TEST(test_signal_verify_multi_station_independent) {
     /* Same cargo_pub appears on both station 0 (sender TRANSFER) and
      * station 2 (receiver TRANSFER) — what cross-station provenance
      * looks like in real traffic. */
-    struct __attribute__((packed)) {
-        uint8_t from_pubkey[32];
-        uint8_t to_pubkey[32];
-        uint8_t cargo_pub[32];
-        uint8_t kind;
-        uint8_t _pad[7];
-    } xfer = {0};
+    chain_payload_transfer_t xfer = {0};
     for (int b = 0; b < 32; b++) xfer.cargo_pub[b] = (uint8_t)(0x80 + b);
     memcpy(xfer.from_pubkey, w->stations[0].station_pubkey, 32);
     memcpy(xfer.to_pubkey, w->stations[2].station_pubkey, 32);
