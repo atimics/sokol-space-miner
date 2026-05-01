@@ -421,28 +421,36 @@ TEST(test_chain_log_operator_post_replay_determinism) {
                                   payload, (uint16_t)payload_len);
     ASSERT(id == 1);
 
+    uint64_t saved_count = w->stations[0].chain_event_count;
     uint8_t saved_last_hash[32];
     memcpy(saved_last_hash, w->stations[0].chain_last_hash, 32);
 
     free(payload);
-    chain_test_teardown();
 
-    /* Now reload and verify the hash is the same */
-    chain_test_setup("operator_post_replay");
-    WORLD_HEAP w2 = calloc(1, sizeof(world_t));
-    ASSERT(w2 != NULL);
-    w2->rng = 9103u;
-    world_reset(w2);
-    chain_test_wipe_logs(w2);
-    w2->stations[0].chain_event_count = 0;
-    memset(w2->stations[0].chain_last_hash, 0, 32);
+    /* Round-trip the world via save/load — this is the actual replay
+     * condition (server restart). We deliberately do NOT call
+     * world_reset on a fresh world: that resets seeded stations'
+     * chain logs (see chain_log_reset in world_reset, game_sim.c) and
+     * would wipe the on-disk log we just wrote. world_save/load
+     * preserves chain_event_count and chain_last_hash; the on-disk
+     * .log file is untouched. */
+    ASSERT(world_save(w, TMP("clog_op_replay.sav")));
+    WORLD_HEAP loaded = calloc(1, sizeof(world_t));
+    ASSERT(loaded != NULL);
+    ASSERT(world_load(loaded, TMP("clog_op_replay.sav")));
 
+    ASSERT_EQ_INT((int)loaded->stations[0].chain_event_count, (int)saved_count);
+    ASSERT(memcmp(loaded->stations[0].chain_last_hash, saved_last_hash, 32) == 0);
+
+    /* Walk the on-disk log via the loaded station — should still see
+     * the one operator-post event. */
     uint64_t walked = 0;
     uint8_t loaded_last_hash[32];
-    ASSERT(chain_log_verify(&w2->stations[0], &walked, loaded_last_hash));
+    ASSERT(chain_log_verify(&loaded->stations[0], &walked, loaded_last_hash));
     ASSERT_EQ_INT((int)walked, 1);
     ASSERT(memcmp(loaded_last_hash, saved_last_hash, 32) == 0);
 
+    remove(TMP("clog_op_replay.sav"));
     chain_test_teardown();
 }
 
@@ -481,9 +489,9 @@ TEST(test_chain_log_operator_post_text_tamper) {
     ASSERT(chain_log_path_for(w->stations[0].station_pubkey, path, sizeof(path)));
     FILE *f = fopen(path, "r+b");
     ASSERT(f != NULL);
-    /* Entry size = 184 (header) + 2 (payload_len) + payload_len */
-    long entry_size = 184 + 2 + (long)(38 + text_len);
-    /* Flip a byte in the text part (start at offset 38 + 184 + 2) */
+    /* Flip a byte in the text part. Entry layout: 184 (header) + 2
+     * (payload_len) + payload_len; payload starts at file offset
+     * 184 + 2; the variable-length text begins 38 bytes into the payload. */
     fseek(f, 184 + 2 + 38 + 2, SEEK_SET);
     uint8_t b;
     ASSERT(fread(&b, 1, 1, f) == 1);
