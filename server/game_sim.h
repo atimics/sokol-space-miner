@@ -674,6 +674,10 @@ void ledger_earn_by_pubkey(station_t *st, const uint8_t pubkey[32], float amount
 bool ledger_spend_by_pubkey(station_t *st, const uint8_t pubkey[32], float amount, ship_t *ship);
 void ledger_force_debit_by_pubkey(station_t *st, const uint8_t pubkey[32], float amount, ship_t *ship);
 void ledger_credit_supply_by_pubkey(station_t *st, const uint8_t pubkey[32], float ore_value);
+/* Same as ledger_credit_supply_by_pubkey but returns the supplier-share
+ * actually credited (after the 35% station cut). Use this when callers
+ * need to emit accurate +N UI events. */
+float ledger_credit_supply_amount_by_pubkey(station_t *st, const uint8_t pubkey[32], float ore_value);
 void ledger_record_ore_sold(station_t *st, const uint8_t pubkey[32], uint32_t ore_units, uint8_t commodity);
 void ledger_record_dock(station_t *st, const uint8_t pubkey[32], uint64_t tick);
 

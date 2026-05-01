@@ -55,15 +55,30 @@
  * Players earn by smelting/delivering at a station and spend at that station.
  * Cross-station wealth transfer requires physically hauling goods. */
 
-/* Find or create a ledger entry — forward decl (defined with other ledger code below) */
-static int ledger_find_or_create(station_t *st, const uint8_t *token);
+/* Forward decl — definition below. The declaration in game_sim.h
+ * makes this externally visible; the forward decl here is just so
+ * the early helper code in this file can call it. */
+
+/* Token-based ledger compatibility shim.
+ *
+ * #257 / #479-A.1 keys ledger entries by Ed25519 pubkey (32B). Pre-A.1
+ * callers and pre-A.4 saves used 8B session tokens; some legacy paths
+ * (NPC players, dev-mode anonymous play) still don't have a registered
+ * pubkey at the call site. Rather than duplicate every helper, the
+ * token-based functions construct a "pseudo-pubkey" by placing the
+ * 8B token in the first 8 bytes of a 32B buffer and zero-filling the
+ * rest. Real Layer-A.1 pubkeys are full Ed25519 public keys with
+ * statistically zero chance of having 24 trailing zero bytes, so
+ * pseudo-pubkeys and real pubkeys never collide. */
+static void token_to_pseudo_pubkey(const uint8_t *token, uint8_t pseudo[32]) {
+    memset(pseudo, 0, 32);
+    if (token) memcpy(pseudo, token, 8);
+}
 
 float ledger_balance(const station_t *st, const uint8_t *token) {
-    /* Deprecated — ledger now keyed by pubkey, not token.
-     * This function always returns 0.0f. Use ledger_balance_by_pubkey. */
-    (void)st;
-    (void)token;
-    return 0.0f;
+    uint8_t pseudo[32];
+    token_to_pseudo_pubkey(token, pseudo);
+    return ledger_balance_by_pubkey(st, pseudo);
 }
 
 /* Net currency this station has issued, derived from the ledger
@@ -81,19 +96,15 @@ float station_credit_pool(const station_t *st) {
 }
 
 void ledger_earn(station_t *st, const uint8_t *token, float amount) {
-    /* Deprecated — use ledger_earn_by_pubkey. */
-    (void)st;
-    (void)token;
-    (void)amount;
+    uint8_t pseudo[32];
+    token_to_pseudo_pubkey(token, pseudo);
+    ledger_earn_by_pubkey(st, pseudo, amount);
 }
 
 bool ledger_spend(station_t *st, const uint8_t *token, float amount, ship_t *ship) {
-    /* Deprecated — use ledger_spend_by_pubkey. */
-    (void)st;
-    (void)token;
-    (void)amount;
-    (void)ship;
-    return false;
+    uint8_t pseudo[32];
+    token_to_pseudo_pubkey(token, pseudo);
+    return ledger_spend_by_pubkey(st, pseudo, amount, ship);
 }
 
 /* Force a debit through even when the balance can't cover it. The
@@ -101,11 +112,9 @@ bool ledger_spend(station_t *st, const uint8_t *token, float amount, ship_t *shi
  * station. Use for unrefusable services (spawn fee, mandatory repair)
  * where rejecting the spend would leave the ship in a worse state. */
 void ledger_force_debit(station_t *st, const uint8_t *token, float amount, ship_t *ship) {
-    /* Deprecated — use ledger_force_debit_by_pubkey. */
-    (void)st;
-    (void)token;
-    (void)amount;
-    (void)ship;
+    uint8_t pseudo[32];
+    token_to_pseudo_pubkey(token, pseudo);
+    ledger_force_debit_by_pubkey(st, pseudo, amount, ship);
 }
 
 /* Full-price transfer from station to player ledger — used for
@@ -114,10 +123,8 @@ void ledger_force_debit(station_t *st, const uint8_t *token, float amount, ship_
  * the station's derived pool decreases by the same amount. Caller is
  * responsible for contract bookkeeping. */
 void ledger_earn_from_pool(station_t *st, const uint8_t *token, float amount) {
-    /* Deprecated — use ledger_credit_supply_by_pubkey. */
-    (void)st;
-    (void)token;
-    (void)amount;
+    /* Same shape as ledger_earn — full credit, no station cut. */
+    ledger_earn(st, token, amount);
 }
 
 /* ---- PubKey-based ledger API (#257 #479) ---- */
@@ -161,13 +168,27 @@ void ledger_force_debit_by_pubkey(station_t *st, const uint8_t pubkey[32], float
     st->ledger[idx].lifetime_credits_out += (uint32_t)amount;
 }
 
-void ledger_credit_supply_by_pubkey(station_t *st, const uint8_t pubkey[32], float ore_value) {
-    if (ore_value <= 0.0f) return;
+/* Smelt-payout credit. Station keeps a 35% cut, supplier gets 65%.
+ * Returns the actual amount credited so callers can emit accurate +N
+ * UI events. Pre-Layer-A.1 anonymous players (zero pubkey) are not
+ * credited; the supplier-cut amount stays on the station's pool. */
+float ledger_credit_supply_amount_by_pubkey(station_t *st, const uint8_t pubkey[32], float ore_value) {
+    if (ore_value <= 0.0f) return 0.0f;
     int idx = ledger_find_or_create_by_pubkey(st, pubkey);
-    if (idx < 0) return;
-    st->ledger[idx].balance += ore_value;
+    if (idx < 0) return 0.0f;
+    /* Station keeps 35% cut for smelting — supplier gets 65% */
+    float supplier_share = ore_value * 0.65f;
+    if (supplier_share < 0.01f) return 0.0f;
+    /* Pool is derived from -Σ(balance); crediting the supplier here
+     * automatically pushes the station's net issuance more negative. */
+    st->ledger[idx].balance += supplier_share;
     st->ledger[idx].lifetime_supply += ore_value;
-    st->ledger[idx].lifetime_credits_in += (uint32_t)ore_value;
+    st->ledger[idx].lifetime_credits_in += (uint32_t)supplier_share;
+    return supplier_share;
+}
+
+void ledger_credit_supply_by_pubkey(station_t *st, const uint8_t pubkey[32], float ore_value) {
+    (void)ledger_credit_supply_amount_by_pubkey(st, pubkey, ore_value);
 }
 
 void ledger_record_ore_sold(station_t *st, const uint8_t pubkey[32], uint32_t ore_units, uint8_t commodity) {
@@ -2618,7 +2639,7 @@ static void step_mining_system(world_t *w, server_player_t *sp, float dt, bool m
 /* Find or create a ledger entry keyed by player pubkey (#257 #479).
  * Ledger entries are now keyed by Ed25519 pubkey (32B) instead of
  * session token (8B), so relationships survive token rotation. */
-static int ledger_find_or_create_by_pubkey(station_t *st, const uint8_t pubkey[32]) {
+int ledger_find_or_create_by_pubkey(station_t *st, const uint8_t pubkey[32]) {
     if (!pubkey) return -1;
     /* Check if all zeros — anonymous player without registered identity */
     bool is_zero = true;
@@ -2662,33 +2683,20 @@ static int ledger_find_or_create_by_pubkey(station_t *st, const uint8_t pubkey[3
     return idx;
 }
 
-static int ledger_find_or_create(station_t *st, const uint8_t *token) {
-    /* Deprecated — session tokens no longer used as ledger keys.
-     * Callers should switch to ledger_find_or_create_by_pubkey.
-     * Returns -1 to force callers to update. */
-    (void)st;
-    (void)token;
-    return -1;
-}
-
 /* Credit a player's ledger when they supply ore to a station.
  * Pays from the station's credit pool — pool may go negative (the
  * station carries the debt). Total system credits are still conserved.
  * Returns the actual amount credited so callers can emit accurate +N
- * events. */
+ * events. Token form runs through the pseudo-pubkey shim so legacy
+ * callers stay working. */
 float ledger_credit_supply_amount(station_t *st, const uint8_t *token, float ore_value) {
-    /* Deprecated — use ledger_credit_supply_by_pubkey. */
-    (void)st;
-    (void)token;
-    (void)ore_value;
-    return 0.0f;
+    uint8_t pseudo[32];
+    token_to_pseudo_pubkey(token, pseudo);
+    return ledger_credit_supply_amount_by_pubkey(st, pseudo, ore_value);
 }
 
 void ledger_credit_supply(station_t *st, const uint8_t *token, float ore_value) {
-    /* Deprecated — use ledger_credit_supply_by_pubkey. */
-    (void)st;
-    (void)token;
-    (void)ore_value;
+    (void)ledger_credit_supply_amount(st, token, ore_value);
 }
 
 /* Hail: report station-local balance (informational — no withdrawal). */
@@ -5148,9 +5156,15 @@ void player_seed_credits(server_player_t *sp, world_t *w) {
     /* Already established a ledger here? Skip — debt and earnings
      * carry across reconnects and respawns. We probe by entry
      * existence (any nonzero balance, positive or negative) since
-     * fresh entries always start at exactly 0. */
+     * fresh entries always start at exactly 0.
+     *
+     * Token-based path (via pseudo-pubkey shim) so pre-Layer-A.1
+     * anonymous players still get a stable ledger row keyed on their
+     * 8B session token. Layer-A.1 players additionally have a real
+     * 32B pubkey on sp->pubkey; once they register, ledger entries
+     * migrate via the v45→v46 save path (sim_save.c). */
     for (int i = 0; i < w->stations[st].ledger_count; i++) {
-        if (memcmp(w->stations[st].ledger[i].player_token,
+        if (memcmp(w->stations[st].ledger[i].player_pubkey,
                    sp->session_token, 8) == 0) {
             return;
         }

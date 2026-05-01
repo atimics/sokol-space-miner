@@ -704,8 +704,8 @@ static void handle_ws_message(struct mg_connection *c, struct mg_ws_message *wm)
                         for (int s = 0; s < MAX_STATIONS; s++) {
                             station_t *st = &world.stations[s];
                             for (int e = 0; e < st->ledger_count; e++) {
-                                if (memcmp(st->ledger[e].player_token, old_tok, 8) == 0) {
-                                    memcpy(st->ledger[e].player_token,
+                                if (memcmp(st->ledger[e].player_pubkey, old_tok, 8) == 0) {
+                                    memcpy(st->ledger[e].player_pubkey,
                                            sp->session_token, 8);
                                 }
                             }
