@@ -49,8 +49,12 @@ extern "C" {
  * SIGNAL_PACK_POP around the typedef, and tag the struct with
  * SIGNAL_PACKED for the GCC/Clang side. */
 #if defined(_MSC_VER)
-#  define SIGNAL_PACK_PUSH __pragma(pack(push, 1))
-#  define SIGNAL_PACK_POP  __pragma(pack(pop))
+   /* MSVC C4200: zero-sized / flexible array members are C99 standard
+    * but MSVC's strict mode flags them. We use them deliberately for
+    * variable-length payloads (operator-post text). Suppress around
+    * the pack region. */
+#  define SIGNAL_PACK_PUSH __pragma(pack(push, 1)) __pragma(warning(push)) __pragma(warning(disable: 4200))
+#  define SIGNAL_PACK_POP  __pragma(warning(pop)) __pragma(pack(pop))
 #  define SIGNAL_PACKED
 #else
 #  define SIGNAL_PACK_PUSH
