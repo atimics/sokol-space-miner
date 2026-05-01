@@ -204,7 +204,10 @@ void ledger_record_dock(station_t *st, const uint8_t pubkey[32], uint64_t tick) 
     if (!pubkey) return;
     int idx = ledger_find_or_create_by_pubkey(st, pubkey);
     if (idx < 0) return;
-    if (st->ledger[idx].first_dock_tick == 0) {
+    /* Use total_docks==0 as the first-dock sentinel rather than
+     * first_dock_tick==0: tick 0 is a valid initial-world-state
+     * dock time, not a "no dock yet" marker. */
+    if (st->ledger[idx].total_docks == 0) {
         st->ledger[idx].first_dock_tick = tick;
     }
     st->ledger[idx].last_dock_tick = tick;
@@ -696,9 +699,11 @@ static void dock_ship(world_t *w, server_player_t *sp) {
     /* Keep ship at its current position (already in dock range) — just stop it */
     sp->ship.vel = v2(0.0f, 0.0f);
     SIM_LOG("[sim] player %d docked at station %d\n", sp->id, sp->current_station);
-    /* Track dock event for relationship data (#257) */
+    /* Track dock event for relationship data (#257). w->time is a
+     * float — explicitly cast to the uint64_t tick parameter. */
     if (sp->current_station >= 0 && sp->pubkey_set) {
-        ledger_record_dock(&w->stations[sp->current_station], sp->pubkey, w->time);
+        ledger_record_dock(&w->stations[sp->current_station], sp->pubkey,
+                            (uint64_t)w->time);
     }
     emit_event(w, (sim_event_t){.type = SIM_EVENT_DOCK, .player_id = sp->id});
 }
