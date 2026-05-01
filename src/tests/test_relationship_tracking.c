@@ -1,5 +1,4 @@
 #include "tests/test_harness.h"
-#include <unistd.h>
 
 TEST(test_relationship_dock_dock_ticking) {
     /* Verify dock events increment total_docks and set first/last dock ticks. */
