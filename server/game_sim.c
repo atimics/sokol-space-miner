@@ -4958,7 +4958,7 @@ void world_reset(world_t *w) {
         if (motd_len > 0) {
             memcpy(payload + 38, st->hail_message, motd_len);
         }
-        (void)chain_log_emit(w, st, CHAIN_EVT_OPERATOR_POST, payload, 38 + motd_len);
+        (void)chain_log_emit(w, st, CHAIN_EVT_OPERATOR_POST, payload, (uint16_t)(38 + motd_len));
     }
 
     rebuild_signal_chain(w);
