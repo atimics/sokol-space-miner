@@ -66,6 +66,7 @@ typedef enum {
     CHAIN_EVT_TRADE        = 4,  /* transfer + ledger delta, atomic */
     CHAIN_EVT_LEDGER       = 5,  /* station-side credit balance mutation */
     CHAIN_EVT_ROCK_DESTROY = 6,  /* asteroid fractured to terminal state */
+    CHAIN_EVT_OPERATOR_POST = 7, /* persona-authored text signed by station */
     CHAIN_EVT_TYPE_COUNT
 } chain_event_type_t;
 
@@ -121,6 +122,17 @@ typedef struct {
 } SIGNAL_PACKED chain_payload_rock_destroy_t;
 SIGNAL_PACK_POP
 
+SIGNAL_PACK_PUSH
+typedef struct {
+    uint8_t  kind;            /* 0=HAIL_MOTD, 1=CONTRACT_FLAVOR, 2=RARITY_TIER, reserved 3-255 */
+    uint8_t  tier;            /* for kind=RARITY_TIER: 0=common,1=uncommon,2=rare,3=ultra */
+    uint16_t ref_id;          /* contract id, motd seed, etc. — kind-specific */
+    uint8_t  text_sha256[32]; /* SHA-256 of UTF-8 text bytes */
+    uint16_t text_len;        /* 0..256 */
+    uint8_t  text[];          /* UTF-8, exact length text_len, no NUL terminator */
+} SIGNAL_PACKED chain_payload_operator_post_t;
+SIGNAL_PACK_POP
+
 /* Wire-format guards: any field-list change that shifts these sizes
  * forks the chain log byte format and must be paired with a
  * versioning story (or accepted as a hard break). */
@@ -129,6 +141,9 @@ _Static_assert(sizeof(chain_payload_craft_t)        == 104, "craft payload size"
 _Static_assert(sizeof(chain_payload_transfer_t)     == 104, "transfer payload size");
 _Static_assert(sizeof(chain_payload_trade_t)        == 48,  "trade payload size");
 _Static_assert(sizeof(chain_payload_rock_destroy_t) == 96,  "rock_destroy payload size");
+/* The fixed-prefix size (before the text[] variable-length array):
+ * kind(1) + tier(1) + ref_id(2) + text_sha256(32) + text_len(2) = 38 bytes */
+_Static_assert(offsetof(chain_payload_operator_post_t, text) == 38, "operator_post fixed-prefix size");
 
 /* Fixed-size event header — exactly 184 bytes on disk. The serialized
  * form matches this struct's natural C11 layout (verified by static
