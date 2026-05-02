@@ -10,10 +10,16 @@ substrate work but the wrong target.
 
 Matter in Signal exists in **three** states — not one. **Crate identity
 is born at the smelt/craft boundary**, not at the moment of mining. The
-substrate already implements this correctly; the things we were about
-to "fix" weren't actually broken. The real gaps are in the **chain log's
-witness coverage of pre-crate matter** and in the **player-facing
-display** of provenance the substrate already records.
+data model is correct; we don't need to crateify ore.
+
+But the chain log has real gaps that the original slice plan missed:
+the fragment-tow smelt path mints ingots with full lineage but emits
+no chain event at all, while the (probably-dead) hopper-path emits
+events with zero lineage. So the audit log today is dominated by
+events that don't have provenance and missing the events that do.
+
+The work is in chain-log coverage, instrumentation to confirm dead
+code, and player-facing display — not in the cargo data model.
 
 ## The conceptual model
 
@@ -64,10 +70,11 @@ the fragment is ever smelted (the resulting ingot's `parent_merkle ==
 fragment_pub`). If the fragment is destroyed in the void without being
 smelted, its identity is lost — there's nothing to inherit it.
 
-### State 2 — Bulk Float (transient, at-station-only)
+### State 2 — Bulk Float (transient, at-station-only, possibly dead)
 
-This is the form we were about to migrate, until we realized it's a
-working buffer, not a stockpile.
+This is the form we were about to migrate, until we realized it's
+either a working buffer or a vestigial code path. Either way, not a
+crate.
 
 `station._inventory_cache[c]` for `c < COMMODITY_RAW_ORE_COUNT` (i.e.
 the three raw ore slots) holds floats representing ore that has *just
@@ -75,27 +82,31 @@ been deposited at a hopper* and *is about to be smelted*. The typical
 lifetime of a value in this float is a few sim ticks — deposit, brief
 buffer, consume.
 
-There are two ways ore lands here:
+But here's the thing: **the deposit-side population paths look mostly
+or entirely vestigial in today's code.** The agent's mapping shows the
+write sites for raw-ore floats are:
 
-1. **Player tow → hopper drop.** A player tows a ferrite fragment into
-   the radius of a hopper module. The fragment is consumed
-   atomically — the hopper float briefly accumulates the fragment's
-   ore amount, and within ticks the furnace pulls from that float to
-   produce an ingot. (Actually, looking at the code, the most common
-   path is even tighter than that: the fragment is consumed and the
-   ingot is minted in the same operation, with `parent_merkle =
-   fragment_pub`. The float never holds the ore for long.)
-2. **NPC autopilot deposit.** NPCs run a hauler/miner loop that can
-   deposit ore amounts into hoppers without going through the
-   tow-physics layer. This is the path that *actually* makes the float
-   non-transient — NPCs can pile ore in faster than furnaces drain it,
-   and the float can sit at meaningful values.
+- Player ore-sell at dock (`game_sim.c:1089`) — *vestigial per #259*
+- Player ore-deliver against contract (`game_sim.c:1171`) — *same*
+- Player ore-buy from station refill (`game_sim.c:1231`)
+- Economy sim production (`economy.c:90`)
+
+Players no longer carry raw ore in `ship.cargo[]` after the #259 tow
+migration (comment at `game_sim.c:1148-1154` confirms). NPCs never
+deposit raw ore — they tow fragments via `npc_ship_t.towed_fragment`
+(single int16, not an array) and deliver through the fragment-tow path.
+
+So in practice, the hopper float for raw ore may never be populated in
+normal multiplayer play. The "smelt from hopper float" code path
+(`sim_production.c:240-280`) might be dead. Worth instrumenting before
+deciding whether to delete or heal.
 
 **Bulk float has no crate identity by design.** It represents
 undifferentiated material in transit through the smelter's working
 volume. Putting it in the manifest would be like assigning a serial
 number to the iron filings sitting in a foundry's input chute — the
-abstraction doesn't fit the real-world thing.
+abstraction doesn't fit the real-world thing. *And* it might be
+unused.
 
 ### State 3 — Crate (named, identity-bearing, persistent)
 
@@ -155,39 +166,44 @@ not a thing you can put your hand on.
 
 ## Mapping the model to code
 
-> **Note:** the file:line citations below were pulled from a focused
-> code-walk. The Explore agent's deeper survey will sharpen these and
-> add ones I missed; treat this section as the canonical reference
-> after that pass folds in.
-
 ### Fragment
 
 | Concern | Where |
 |---|---|
-| Storage | `world.asteroids[]` array. Each `asteroid_t` carries `fragment_pub[32]` and `fracture_seed[32]` (`shared/types.h:538-552`). |
-| Player tow list | `ship.towed_fragments[10]` of int16 asteroid indices, plus `towed_count` (`shared/types.h:208-209`). |
-| Fragment population | Asteroids spawn from belt generation (`shared/belt.c`, `src/asteroid_field.c`). Fragments are created when a parent asteroid is fractured in `server/sim_asteroid.c`. |
-| Fragment consumption | `server/sim_production.c:730+` — when a towed fragment arrives at a hopper, it is removed from `towed_fragments[]` and the ingot is minted in the same step. |
+| Storage | `world.asteroids[]`. Each `asteroid_t` carries `fragment_pub[32]`, `fracture_seed[32]`, `last_towed_token[8]`, `last_fractured_token[8]`, `grade`, `rock_pub[32]` (`shared/types.h:538-555`). |
+| Player tow list | `ship.towed_fragments[10]` of int16 indices, plus `towed_count` (`shared/types.h:208-209`). |
+| NPC tow | NPCs use a *different* shape: `npc_ship_t.towed_fragment` (single int16, not an array) — set at `server/sim_ai.c:1560`. NPC ships only tow one fragment at a time. |
+| Tow-add site | `server/game_sim.c:1888` — tractor pulse in `step_fragment_collection()`. Fragment ownership is stamped via `last_towed_by` and `last_towed_token[8]` at the same instant. |
+| Tow-remove sites (player) | `server/sim_production.c:732-736` (smelt), `server/game_sim.c:1827-1828` (asteroid destroyed), `:1916-1917` (fracture child escapes gravity), `:1927-1928` (lands in station beam), `:1950-1951` (manual R-release). |
+| Fragment generation | Initial spawn from `shared/belt.c` and `src/asteroid_field.c`. Fracture children created in `server/sim_asteroid.c`. |
 
 ### Bulk float
 
 | Concern | Where |
 |---|---|
-| Storage | `station._inventory_cache[c]` for `c < COMMODITY_RAW_ORE_COUNT` (`shared/types.h:327`). The `_` prefix and "private; use accessors" comment indicate this is no longer treated as authoritative; for finished goods it's a derived cache, but for raw ore it's still where the value lives. |
-| Deposit path 1 (player tow) | The atomic fragment-to-ingot path mostly bypasses the float. It briefly increments `_inventory_cache[output_ingot]` (line 748) — note that's the *ingot* commodity, not ore. The ore commodity slot is barely touched on this path. |
-| Deposit path 2 (NPC) | NPC autopilot in `server/sim_ai.c` deposits ore amounts directly into `_inventory_cache[ORE]` when a hauler arrives at a hopper. (Specific function TBD; agent will pin down.) |
-| Smelt consumption | `server/sim_production.c:240-280` — the hopper-style smelt path. Furnace tick reads `_inventory_cache[ore]`, computes `consume`, drains the float, mints ingots. |
-| Wire visibility | `NET_MSG_STATION_MANIFEST` summarizes manifest contents to clients. Whether ore floats are summarized for display TBD; agent will confirm. |
+| Storage | `station._inventory_cache[c]` for `c < COMMODITY_RAW_ORE_COUNT` (`shared/types.h:327`). Underscore prefix and "private; use accessors" comment indicate the field is no longer treated as authoritative for finished goods, but for raw ore it's still where the value lives. |
+| Public accessor | `station_inventory_amount(station, commodity)` (`src/commodity.c:194`). Used by client UI for *finished-goods* display only; raw ore display is intentionally skipped. |
+| Write — fragment-smelt completion | `server/sim_production.c:748` writes `_inventory_cache[output] += a->ore` — note `output` is the *ingot* commodity, not the ore. The ore commodity slot itself is barely written on this path; the float-as-ingot accumulator is. |
+| Write — player ore-sell | `server/game_sim.c:1089` — `_inventory_cache[commodity] += 1.0f` when a docked player sells ore from `ship.cargo[]`. *This is a vestigial path*; comment at `:1148-1154` says players no longer carry raw ore post-#259. Reachable but probably never exercised in normal play. Worth confirming. |
+| Write — player ore-deliver | `server/game_sim.c:1171` — same path for contract delivery. Same vestigial concern. |
+| Write — player ore-buy | `server/game_sim.c:1231` — when a player buys ore from a station (refill scenario). |
+| Write — economy sim | `src/economy.c:90` — production recipe execution. |
+| Read — furnace intake | `server/sim_production.c:251, 275` — gates the smelt loop on float > threshold. |
+| Read — smelt rate/consume | `server/sim_production.c:279-280` — bulk-float drain per tick. |
+| Read — UI display | `src/station_ui.c:676` — trade UI ore-side display. |
+| Read — price scaling | `src/commodity.c:172` — `station_buy_price` reads hopper fill. |
+| Persistence | The float is **not** persistent at meaningful timescales. Furnace smelt rate (`REFINERY_BASE_SMELT_RATE = 2.0`/sec, hopper cap 500) drains it within seconds at typical throughput. |
 
 ### Crate
 
 | Concern | Where |
 |---|---|
-| Type | `cargo_unit_t` (`shared/types.h:138-160`). 80 bytes. As of slice 0, byte 7 is `quantity` (u8). |
-| Storage | `manifest_t` (`shared/types.h:151-155`) — `cargo_unit_t units[]` plus count/cap. Held by `ship_t.manifest` and `station_t.manifest`. |
-| Creation | The three hash helpers in `src/manifest.c`: `hash_ingot` (line 481), `hash_product` (line 503), `hash_legacy_migrate_unit` (line 536). All set `quantity = 1` as of slice 0. |
+| Type | `cargo_unit_t` (`shared/types.h:138-160`). 80 bytes. As of slice 0 (PR #526), byte 7 is `quantity` (u8, default 1). |
+| Storage | `manifest_t` (`shared/types.h:151-155`) — held by `ship_t.manifest` and `station_t.manifest`. |
+| Creation | Three hash helpers in `src/manifest.c`: `hash_ingot` (`:481`), `hash_product` (`:503`), `hash_legacy_migrate_unit` (`:536`). All set `quantity = 1`. |
 | Mutation | `manifest_push`, `manifest_remove`, `manifest_consume_by_commodity` in `src/manifest.c`. |
-| Chain witnessing | `chain_log_emit(EVT_SMELT)` in `server/sim_production.c:314` for ingot mint. `chain_log_emit(EVT_CRAFT)` at `:160` for fab/craft. `chain_log_emit(EVT_TRANSFER)` in `server/cargo_receipt_issue.c:58` for inter-holder moves. |
+| Chain witnessing | `chain_log_emit(EVT_SMELT)` at `server/sim_production.c:314` for ingot mint. `chain_log_emit(EVT_CRAFT)` at `:160` for fab/craft. `chain_log_emit(EVT_TRANSFER)` at `server/cargo_receipt_issue.c:58` for inter-holder moves. |
+| Wire | `NET_MSG_PLAYER_MANIFEST` and `NET_MSG_STATION_MANIFEST` send `(commodity, grade) → count` summaries derived from manifests. They do *not* send the bulk float. The hopper float is server-side only. |
 
 ## What slice 0 actually bought us
 
@@ -222,50 +238,101 @@ for representing *raw* ore that doesn't want crate identity at all.
 
 The actual gaps are not in the data model. They're in:
 
-### Gap 1 — Chain log doesn't witness fragment lifecycle
+### Gap 1 — Chain log misses the fragment-tow smelt path entirely
 
-Today, a fragment can be towed across half the universe, dropped at a
-hopper, and smelted into an ingot — and only the *final* event
-(`EVT_SMELT` for the ingot) is recorded in the chain log. The fragment's
-journey is invisible.
+Surprise: there's only **one** `EVT_SMELT` emission site in the
+production code — `server/sim_production.c:314`, which is the
+hopper-path path. The richer **fragment-tow path mints ingots without
+emitting any chain event at all.**
 
-This means heritage queries like "find a frame whose ferrite was towed
-by 0F3H-CH from Belt-7 in epoch 4000" can't be answered, even though
-the substrate has the fragment_pub and the towing relationship at
-runtime — they just aren't witnessed.
+So the picture inverts what I initially assumed:
 
-**The fix is chain-log work, not crate work.** Add three new chain
-event types (`EVT_FRAGMENT_TOW`, `EVT_FRAGMENT_DEPOSIT`,
-`EVT_FRAGMENT_LOST`) and emit them at the corresponding sim transitions.
-Fragment_pub stays the source of identity; the chain log just adds
-witness coverage to the in-flight phase.
+- **Hopper-path:** emits `EVT_SMELT` events, but with `parent_merkle =
+  0` (no fragment to attribute to). Witnessed but broken-lineage.
+- **Fragment-tow path:** mints ingots with full lineage
+  (`parent_merkle = fragment_pub` via `hash_ingot()` at
+  `sim_production.c:768`), but emits no chain event. Honest lineage
+  but invisible to the audit log.
 
-### Gap 2 — NPC-deposited ore mints ingots with broken lineage
+The fragment-tow path is the one that runs in normal play (every
+player smelt goes through it). The hopper path is suspected dead post-#259
+but still wired up.
+
+**Net effect:** the chain log today is dominated by `EVT_SMELT` events
+that *don't* have lineage, and missing the events that *do*. Heritage
+queries that filter on fragment lineage can't be answered against the
+chain log.
+
+The fix has two pieces:
+1. **Add `EVT_SMELT` emission to the fragment-tow path** at
+   `server/sim_production.c:768` (or wherever the fragment-completion
+   transition fires). Populate `fragment_pub` from the asteroid record.
+2. **Add three additional chain event types** —
+   `EVT_FRAGMENT_TOW`, `EVT_FRAGMENT_DEPOSIT`, `EVT_FRAGMENT_LOST` —
+   and emit them at the corresponding sim transitions in
+   `server/game_sim.c` (lines 1888 / 1827-1828 / 1916-1917 /
+   1927-1928 / 1950-1951). This gives the in-flight phase witness
+   coverage.
+
+Both pieces are pure chain-log work. The substrate already has the
+data; the emit calls just aren't there.
+
+### Gap 2 — Hopper-path smelt mints ingots with broken lineage
 
 When the smelter consumes from `_inventory_cache[ORE]` (the bulk-float
-deposit path), the resulting ingot is minted without a real
-`parent_merkle` — there's no source fragment to attribute to. Looking at
-`server/sim_production.c:303-313`, the comment confirms this:
+path), the resulting ingot is minted with `parent_merkle = 0` — no
+source fragment to attribute to. The hardcoded origin string is
+`"REFN0000"` (`station_finished_accumulate` callsite). The comment at
+`server/sim_production.c:304-306` is explicit about this:
 
 > "We don't know the source fragment_pub for hopper-path smelts (#280
 > fragment-tow path is separate); use zero so verifiers can
 > distinguish."
 
-So the chain log already distinguishes "fragment-attributed ingot"
-(parent_merkle = fragment_pub) from "hopper-attributed ingot"
-(parent_merkle = 0). That's good — it means the substrate is honest
-about the gap. But it also means **a chunk of the ingot supply has
-zero-merkle lineage**, which limits the heritage-contract design space.
+The substrate is honest about the gap, which is good. But it also
+means any ingot that came through the hopper-path has zero-merkle
+lineage and can't participate in heritage queries.
 
-The fix is either:
-- Have NPC autopilot also use the tow-physics path (so all ore arrives
-  via fragments and inherits real lineage), or
-- Mint a synthetic "NPC-batch" lineage anchor when the NPC deposits
-  bulk into a hopper, and use *that* as `parent_merkle` for ingots
-  smelted from the resulting float
+**There's a related discovery worth flagging.** The agent's mapping
+shows that the hopper-float-population paths in current code are:
 
-The first is more uniform; the second is cheaper. Either way, this is
-sim/AI work, not data-model work.
+- Player sell-ore-at-dock (`game_sim.c:1089`)
+- Player deliver-ore-on-contract (`game_sim.c:1171`)
+- Player buy-ore-from-station (`game_sim.c:1231`)
+- Economy sim production (`economy.c:90`)
+
+The first two are *vestigial* per the comment at
+`server/game_sim.c:1148-1154` — players stopped carrying raw ore in
+`ship.cargo[]` after #259. The third is a refill path. The fourth is
+NPC-economy production. **No NPC ever deposits raw ore at a hopper**;
+NPC miners use `npc_ship_t.towed_fragment` and deliver to furnaces via
+the fragment-tow path, same as players (`server/sim_ai.c:989-1006`,
+`:1560`).
+
+So the practical question is: **is the hopper-float path actually
+exercised in normal multiplayer play, or is it dead code from #259's
+half-finished migration?** If it's dead, this whole "gap 2" disappears
+— there's no hopper-path smelt happening, so there are no zero-merkle
+ingots being minted.
+
+This is worth instrumenting before fixing. Add a counter on
+`server/sim_production.c:280` (the hopper-float drain) and watch a
+multi-hour live game session. If the counter stays at zero,
+"gap 2" downgrades to "dead code path; consider removal" instead of
+"lineage-fix project."
+
+Two possible outcomes:
+
+- **If hopper-path is dead in practice:** delete the
+  `_inventory_cache[ORE]` write paths at `game_sim.c:1089/1171/1231`
+  and the matching read at `sim_production.c:240-280`. Bulk float for
+  raw ore goes away entirely. Pure fragment-tow → ingot pipeline.
+- **If hopper-path is live:** add a synthetic batch-lineage anchor at
+  hopper deposit, used as `parent_merkle` for ingots smelted from the
+  resulting float. Each "deposit batch" gets a content-hashed pub
+  derived from `(station, epoch, depositor_session)`.
+
+Don't pick yet; instrument first.
 
 ### Gap 3 — Players can't see provenance at all
 
@@ -281,43 +348,59 @@ log. No new screens, no new keys, just a string format change.
 
 ## Recommended next moves
 
-Ranked by value-per-effort:
+Ranked by value-per-effort. Bumped slightly from the original draft
+based on the chain-log-emission findings.
 
-**1. Player-visible lineage display (one week, low risk).**
+**1. Instrument hopper-path to confirm dead-code suspicion (one
+afternoon, zero risk).** Add a counter at
+`server/sim_production.c:280` (the `_inventory_cache[ore] -= consume`
+line). Run a multi-hour live session. If the counter stays at zero,
+the entire hopper-path can be ripped out and gap 2 disappears. If
+it's non-zero, the heal plan in gap 2 applies.
+
+**2. Add `EVT_SMELT` emission to the fragment-tow path (one to two
+days, low risk).** Currently fragment-tow smelts mint ingots with
+full lineage but emit nothing to the chain log. Adding the emit at
+`server/sim_production.c:~768` with `fragment_pub` populated from the
+asteroid record fixes the audit-log invisibility. This is what
+unblocks every downstream heritage feature.
+
+**3. Player-visible lineage display (one week, low risk).**
 Surface what the substrate already records. Render a single-line
 provenance summary on cargo rows and station inventory rows. Pulls
-from `cargo_unit_t` fields (origin_station, mined_block, prefix_class)
-that already exist. Zero data-model change. The first thing players
-will *feel* from years of substrate work.
+from `cargo_unit_t` fields (`origin_station`, `mined_block`,
+`prefix_class`) that already exist. Zero data-model change. The first
+thing players will *feel* from years of substrate work.
 
-**2. Chain events for fragment lifecycle (one to two weeks, medium
-risk).** Add `EVT_FRAGMENT_TOW`, `EVT_FRAGMENT_DEPOSIT`,
-`EVT_FRAGMENT_LOST`. Emit at the corresponding sim transitions. The
-chain-log volume will rise (one event per fragment per state change),
-so worth measuring against the binary-fuse rock-ledger machinery
-already in place. This is what unlocks heritage contracts that
-reference in-flight ore movements.
+**4. Chain events for fragment in-flight lifecycle (one to two weeks,
+medium risk).** Add `EVT_FRAGMENT_TOW`, `EVT_FRAGMENT_DEPOSIT`,
+`EVT_FRAGMENT_LOST`. Emit at the corresponding sim transitions
+(`server/game_sim.c:1888` for tow, `:1827-1828` for asteroid destroyed,
+`:1916-1917` for fracture-child escape, `:1927-1928` for station-beam
+arrival, `:1950-1951` for manual release). Chain-log volume will rise
+(one event per fragment per state change); worth measuring against the
+binary-fuse rock-ledger machinery already in place.
 
-**3. Heal NPC-deposited ore lineage (one week, medium risk).**
-Pick an approach (synthetic batch anchor vs route NPCs through the
-tow-physics path). Backfill `parent_merkle` for the broken-lineage
-ingot path. Now every ingot in the universe has provable parents.
+**5. Resolve gap 2 based on (1)'s instrumentation result.** Either
+delete the hopper-path entirely (if dead) or add synthetic batch
+lineage (if live).
 
-**4. Heritage contract templates (two weeks, low risk).**
-With (1)-(3) in place, contracts can filter on `parent_merkle` chains.
+**6. Heritage contract templates (two weeks, low risk).**
+With (2)-(5) in place, contracts can filter on `parent_merkle` chains.
 Build the contract-emission templates that reference real chain-log
-history. This is the player-facing payoff: the universe's history
-becomes the quest content.
+history. The player-facing payoff: the universe's history becomes the
+quest content.
 
 What's *not* on this list:
 
 - ❌ Migrate `_inventory_cache[ORE]` to manifest crates. The float is
-  intentionally a working buffer. Not a problem; don't fix.
+  intentionally a working buffer (or dead code). Not a problem; don't
+  "fix" by complicating it.
 - ❌ Add ore-merge / ore-split logic. Ore doesn't have crate identity
   to merge or split.
 - ❌ Add `EVT_TRANSFER` for ore deposits as raw float movement. The
-  fragment-lifecycle events (gap 1) are the right unit of work; bulk
-  ore transfers between locations don't happen meaningfully today.
+  fragment-lifecycle events are the right unit of work; bulk ore
+  transfers between locations don't happen meaningfully today.
 
 ## Out of scope (and why)
 
@@ -357,7 +440,7 @@ instrumenting before optimizing.
 | `shared/manifest.h` | Crate API: push/remove/find, hash_*, migration helpers |
 | `src/manifest.c` | Crate implementation |
 | `server/sim_production.c` | The smelt boundary lives here. Both fragment-tow and hopper-float smelt paths. |
-| `server/sim_ai.c` | NPC autopilot, including ore-deposit logic that populates the hopper float |
+| `server/sim_ai.c` | NPC autopilot. NPCs tow fragments via `npc_ship_t.towed_fragment` (single-slot) and deliver via the fragment-tow path; they never deposit raw ore at hoppers. |
 | `server/sim_save.c` | Save format, including the manifest persistence and migration paths |
 | `server/chain_log.h` / `chain_log.c` | Append-only signed event log per station |
 | `server/cargo_receipt_issue.c` | EVT_TRANSFER emission |
@@ -371,11 +454,22 @@ instrumenting before optimizing.
 reference it as the cargo architecture's foundational vocabulary.
 
 **Stop the original slice plan from PR #526.** The quantity field
-landed and is genuinely useful for a different purpose; the rest of the
-slices (1-5) targeted a problem that doesn't exist. The new roadmap is
-the four moves above (display → fragment events → NPC lineage heal →
-heritage contracts).
+landed and is genuinely useful for a different purpose (anonymous
+batch compression of finished goods). The rest of the slices (1-5)
+targeted "ore as crate," a problem that doesn't exist. The new
+roadmap is the six moves above:
+
+1. Instrument the hopper-path to confirm or reject the dead-code
+   suspicion.
+2. Add `EVT_SMELT` emission to the fragment-tow path with proper
+   `fragment_pub` attribution.
+3. Player-visible lineage display.
+4. Chain events for fragment in-flight lifecycle (tow / deposit /
+   lost).
+5. Resolve gap 2 based on (1)'s instrumentation result — either
+   delete the hopper-path or add synthetic batch lineage to it.
+6. Heritage contract templates that filter on `parent_merkle` chains.
 
 **No further data-model changes to ore.** Ore stays as fragments and
 bulk float. The work is in chain-log coverage and player-facing
-display.
+display, not in the cargo data model.
