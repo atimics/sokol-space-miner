@@ -1189,6 +1189,12 @@ static void handle_station_state(struct mg_connection *c, int sid, struct mg_htt
         if (pos > BUFSZ - STATION_API_TAIL_MARGIN) break;
     }
 
+    /* Close the "relationships" array opened above. The original
+     * single-call form ("],\"hail\":...") got split across the optional
+     * activity_history block; the close now fires unconditionally so the
+     * JSON stays well-formed regardless of include_activity. */
+    BUF_APPEND(pos, buf, BUFSZ, "]");
+
     /* Activity history (24-hour window, if requested) */
     if (include_activity) {
         double window_start = world.time - 86400.0;

@@ -43,10 +43,26 @@ void avatar_fetch(int station_index, const char *station_slug);
 /* Get cache entry for a station (may be IDLE, FETCHING, READY, FAILED). */
 const avatar_cache_t *avatar_get(int station_index);
 
-/* Get rarity tier index for signal strength. Returns 0-3, or -1 if invalid. */
-int avatar_motd_tier_for_signal(const avatar_cache_t *av, float signal_strength);
+/* Get rarity tier index for signal strength. Returns 0-3, or -1 if invalid.
+ * Pure function — defined inline in the header so the test target can use
+ * it without pulling in sokol-dependent avatar.c. */
+static inline int avatar_motd_tier_for_signal(const avatar_cache_t *av,
+                                              float signal_strength) {
+    if (!av || signal_strength < 0.0f) return -1;
+    for (int i = 0; i < 4; i++) {
+        if (signal_strength >= av->tiers[i].band_min &&
+            signal_strength <= av->tiers[i].band_max) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 /* Get string label for tier index ("COMMON", "UNCOMMON", "RARE", "ULTRA_RARE"). */
-const char *avatar_motd_tier_label(int tier_index);
+static inline const char *avatar_motd_tier_label(int tier_index) {
+    static const char *labels[] = { "COMMON", "UNCOMMON", "RARE", "ULTRA_RARE" };
+    if (tier_index < 0 || tier_index >= 4) return "UNKNOWN";
+    return labels[tier_index];
+}
 
 #endif /* AVATAR_H */

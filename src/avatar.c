@@ -296,22 +296,6 @@ const avatar_cache_t *avatar_get(int station_index) {
     return &cache[station_index];
 }
 
-int avatar_motd_tier_for_signal(const avatar_cache_t *av, float signal_strength) {
-    /* Given signal strength [0.0, 1.0], return the rarity tier index (0-3)
-     * and pointer to that tier's text. Returns -1 if no valid tier found. */
-    if (!av || signal_strength < 0.0f) return -1;
-
-    for (int i = 0; i < 4; i++) {
-        if (signal_strength >= av->tiers[i].band_min &&
-            signal_strength <= av->tiers[i].band_max) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-const char *avatar_motd_tier_label(int tier_index) {
-    static const char *labels[] = { "COMMON", "UNCOMMON", "RARE", "ULTRA_RARE" };
-    if (tier_index < 0 || tier_index >= 4) return "UNKNOWN";
-    return labels[tier_index];
-}
+/* avatar_motd_tier_for_signal and avatar_motd_tier_label are defined
+ * inline in avatar.h so the test target can use them without linking
+ * sokol-dependent avatar.c. */
