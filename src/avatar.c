@@ -27,8 +27,6 @@ static avatar_cache_t cache[MAX_STATIONS];
 static uint32_t shared_sampler;
 static bool initialized;
 
-static int parse_motd_json(avatar_cache_t *entry, const char *json, int json_size);
-
 void avatar_init(void) {
     memset(cache, 0, sizeof(cache));
     sg_sampler samp = sg_make_sampler(&(sg_sampler_desc){
@@ -90,25 +88,15 @@ static void decode_and_upload(avatar_cache_t *entry, void *data, int size) {
     stbi_image_free(pixels);
 }
 
-#ifdef __EMSCRIPTEN__
-
-static void on_fetch_success(void *user, void *data, int size) {
-    avatar_cache_t *entry = (avatar_cache_t *)user;
-    decode_and_upload(entry, data, size);
-}
-
-static void on_fetch_error(void *user) {
-    avatar_cache_t *entry = (avatar_cache_t *)user;
-    fprintf(stderr, "[avatar] portrait fetch failed for '%s'\n", entry->slug);
-    entry->state = AVATAR_STATE_FAILED;
-}
-
+/* Parse multi-tier MOTD JSON from S3:
+ *   {"messages":{"common":"...","uncommon":"...","rare":"...","ultra_rare":"..."},
+ *    "bands":{"common":[0.8,1.0],...},"generated_at":123456,"seed":42}
+ * Returns 1 on success, 0 on parse failure.
+ *
+ * Defined outside the __EMSCRIPTEN__ branch so both web and native callers
+ * resolve it (the native local-MOTD-load path uses it too). */
 static int parse_motd_json(avatar_cache_t *entry, const char *json, int json_size) {
-    /* Parse multi-tier MOTD JSON from S3:
-     * {"messages":{"common":"...","uncommon":"...","rare":"...","ultra_rare":"..."},
-     *  "bands":{"common":[0.8,1.0],...},"generated_at":123456,"seed":42}
-     * Returns 1 on success, 0 on parse failure.
-     */
+    (void)json_size;
     memset(entry->tiers, 0, sizeof(entry->tiers));
 
     const char *tier_names[] = { "common", "uncommon", "rare", "ultra_rare" };
@@ -142,7 +130,6 @@ static int parse_motd_json(avatar_cache_t *entry, const char *json, int json_siz
                 band_start += strlen(search_buf);
                 if (sscanf(band_start, "%f,%f]", &entry->tiers[i].band_min,
                           &entry->tiers[i].band_max) != 2) {
-                    /* Fallback to default bands if parse fails */
                     const float defaults[][2] = {{0.8f,1.0f}, {0.5f,0.8f}, {0.2f,0.5f}, {0.0f,0.2f}};
                     entry->tiers[i].band_min = defaults[i][0];
                     entry->tiers[i].band_max = defaults[i][1];
@@ -154,7 +141,6 @@ static int parse_motd_json(avatar_cache_t *entry, const char *json, int json_siz
             }
         }
     } else {
-        /* Set default bands if not in JSON */
         const float defaults[][2] = {{0.8f,1.0f}, {0.5f,0.8f}, {0.2f,0.5f}, {0.0f,0.2f}};
         for (int i = 0; i < 4; i++) {
             entry->tiers[i].band_min = defaults[i][0];
@@ -170,6 +156,20 @@ static int parse_motd_json(avatar_cache_t *entry, const char *json, int json_siz
 
     return 1;
 }
+
+#ifdef __EMSCRIPTEN__
+
+static void on_fetch_success(void *user, void *data, int size) {
+    avatar_cache_t *entry = (avatar_cache_t *)user;
+    decode_and_upload(entry, data, size);
+}
+
+static void on_fetch_error(void *user) {
+    avatar_cache_t *entry = (avatar_cache_t *)user;
+    fprintf(stderr, "[avatar] portrait fetch failed for '%s'\n", entry->slug);
+    entry->state = AVATAR_STATE_FAILED;
+}
+
 
 static void on_motd_success(void *user, void *data, int size) {
     avatar_cache_t *entry = (avatar_cache_t *)user;
