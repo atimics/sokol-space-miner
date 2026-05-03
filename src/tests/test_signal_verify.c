@@ -22,6 +22,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifndef _WIN32
 /* popen / pclose are POSIX, gated behind _POSIX_C_SOURCE on glibc.
  * test_harness.h pulled stdio.h before any define would matter, so
  * forward-declare them here for the subprocess test below. Both are
@@ -29,6 +30,7 @@
  * and don't need to be visible elsewhere. */
 extern FILE *popen(const char *command, const char *type);
 extern int   pclose(FILE *stream);
+#endif
 
 static void sv_setup(const char *suffix) {
     char path[256];
@@ -363,6 +365,28 @@ TEST(test_signal_verify_operator_post_all_kinds) {
     sv_teardown();
 }
 
+#ifndef _WIN32
+static const char *sv_find_signal_verify_bin(void) {
+    static const char *candidates[] = {
+        "build-test/signal_verify",
+        "build-coverage/signal_verify",
+        "build/signal_verify",
+        "build-verify/signal_verify",
+        "./signal_verify",
+        "../build-test/signal_verify",
+        "../build-coverage/signal_verify",
+        "../build/signal_verify",
+        "../build-verify/signal_verify",
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        FILE *f = fopen(candidates[i], "rb");
+        if (!f) continue;
+        fclose(f);
+        return candidates[i];
+    }
+    return NULL;
+}
+
 TEST(test_signal_verify_tower_chain_invariant_detects_orphan) {
     /* End-to-end test of the new tower_chain_consistent invariant in
      * the signal_verify CLI: emit a chain log containing
@@ -425,17 +449,21 @@ TEST(test_signal_verify_tower_chain_invariant_detects_orphan) {
     ASSERT(chain_log_emit(w, &w->stations[0], CHAIN_EVT_FRAGMENT_TOW,
                           &tow, sizeof(tow)) > 0);
 
-    /* Run signal_verify against the log. The binary lives in the
-     * same build dir as signal_test (CMake builds them as siblings).
-     * Test runs from the repo root so build-test/signal_verify is
-     * the canonical relative path. */
+    /* Run signal_verify against the log when the standalone binary is
+     * available. The coverage job builds only signal_test, so skip there;
+     * test-basic builds all BUILD_TESTS_ONLY targets and exercises this. */
+    const char *verify_bin = sv_find_signal_verify_bin();
+    if (!verify_bin) {
+        TEST_WARN("signal_verify binary not built; skipping CLI invariant subprocess check");
+        sv_teardown();
+        return;
+    }
+
     char log_path[256];
     ASSERT(chain_log_path_for(w->stations[0].station_pubkey, log_path, sizeof(log_path)));
 
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-             "build-test/signal_verify --report=json %s 2>/dev/null",
-             log_path);
+    snprintf(cmd, sizeof(cmd), "%s --report=json %s 2>/dev/null", verify_bin, log_path);
     FILE *p = popen(cmd, "r");
     ASSERT(p != NULL);
     char output[4096] = {0};
@@ -451,6 +479,7 @@ TEST(test_signal_verify_tower_chain_invariant_detects_orphan) {
 
     sv_teardown();
 }
+#endif
 
 void register_signal_verify_tests(void);
 void register_signal_verify_tests(void) {
@@ -463,5 +492,7 @@ void register_signal_verify_tests(void) {
     RUN(test_signal_verify_multi_station_independent);
     RUN(test_signal_verify_operator_post_all_kinds);
     RUN(test_signal_verify_committed_fixture);
+#ifndef _WIN32
     RUN(test_signal_verify_tower_chain_invariant_detects_orphan);
+#endif
 }
