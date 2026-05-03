@@ -376,6 +376,16 @@ static bool apply_invariants(const char *path,
         }
         case CHAIN_EVT_TRADE:
         case CHAIN_EVT_LEDGER:
+        case CHAIN_EVT_OPERATOR_POST:
+        case CHAIN_EVT_FRAGMENT_TOW:
+        case CHAIN_EVT_FRAGMENT_RELEASE:
+            /* No invariants to check on these event types — the report
+             * still counts them via event_type_counts (incremented
+             * earlier in the loop) so a verifier sees the per-type
+             * histogram. Future invariants (e.g., "every fragment with
+             * a TOW event must have a matching SMELT or RELEASE")
+             * would land here. */
+            break;
         default:
             break;
         }
@@ -390,14 +400,16 @@ static bool apply_invariants(const char *path,
 
 static const char *type_name(unsigned t) {
     switch (t) {
-    case CHAIN_EVT_SMELT:        return "SMELT";
-    case CHAIN_EVT_CRAFT:        return "CRAFT";
-    case CHAIN_EVT_TRANSFER:     return "TRANSFER";
-    case CHAIN_EVT_TRADE:        return "TRADE";
-    case CHAIN_EVT_LEDGER:       return "LEDGER";
-    case CHAIN_EVT_ROCK_DESTROY: return "ROCK_DESTROY";
-    case CHAIN_EVT_OPERATOR_POST: return "OPERATOR_POST";
-    default:                     return "UNKNOWN";
+    case CHAIN_EVT_SMELT:            return "SMELT";
+    case CHAIN_EVT_CRAFT:            return "CRAFT";
+    case CHAIN_EVT_TRANSFER:         return "TRANSFER";
+    case CHAIN_EVT_TRADE:            return "TRADE";
+    case CHAIN_EVT_LEDGER:           return "LEDGER";
+    case CHAIN_EVT_ROCK_DESTROY:     return "ROCK_DESTROY";
+    case CHAIN_EVT_OPERATOR_POST:    return "OPERATOR_POST";
+    case CHAIN_EVT_FRAGMENT_TOW:     return "FRAGMENT_TOW";
+    case CHAIN_EVT_FRAGMENT_RELEASE: return "FRAGMENT_RELEASE";
+    default:                         return "UNKNOWN";
     }
 }
 
