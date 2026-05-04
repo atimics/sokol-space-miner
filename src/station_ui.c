@@ -816,7 +816,6 @@ int build_trade_rows(const station_t *st, const ship_t *ship,
             int manifest_g = ship_manifest_count_cg(ship, (commodity_t)c, (mining_grade_t)gi);
             if (manifest_g <= 0) continue;
             int held = manifest_g;
-            if (held <= 0) continue;
             /* Prefix-class price multipliers (#prefix-pricing): if the
              * player is carrying any non-anonymous-prefix unit in this
              * (commodity, grade) bucket, surface the row at the higher
