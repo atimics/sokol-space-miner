@@ -51,6 +51,10 @@ void local_server_init(local_server_t *ls, uint32_t seed) {
      * has rows to surface. Without this, a fresh singleplayer start
      * shows empty markets at every station. */
     world_seed_station_manifests(&ls->world);
+    /* Singleplayer is always a fresh world at this layer (no save
+     * load); seed the chain log genesis events so MOTDs are part of
+     * the chain history just like on the dedicated server. */
+    world_seed_station_chain_genesis(&ls->world);
     ls->world.players[0].connected = true;
     ls->world.players[0].id = 0;
     ls->world.players[0].session_ready = true;

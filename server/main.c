@@ -2282,6 +2282,10 @@ static void load_world_state(void) {
         /* Stations are sovereign currency issuers; no seed pool. The
          * pool just tracks net issuance from genesis. */
         world_seed_station_manifests(&world);
+        /* Emit per-station MOTD + rarity-tier genesis events. Only on
+         * fresh-world boots — a resumed world's chain history already
+         * contains them from its original genesis. */
+        world_seed_station_chain_genesis(&world);
     }
 
     /* Assign stable IDs to any stations loaded from v1 catalogs (id == 0). */

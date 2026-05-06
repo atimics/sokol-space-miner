@@ -5229,6 +5229,16 @@ static void seed_station_motd_chain_events(world_t *w, station_t *st,
     }
 }
 
+/* Genesis MOTD + tier events for the seeded stations. Caller must
+ * invoke this only on a fresh world (no save loaded), AFTER world_reset
+ * has set up station_authority. Calling it on a resumed world would
+ * append duplicate genesis events to an already-extended chain. */
+void world_seed_station_chain_genesis(world_t *w) {
+    int n = w->station_count < 3 ? w->station_count : 3;
+    for (int s = 0; s < n; s++)
+        seed_station_motd_chain_events(w, &w->stations[s], s);
+}
+
 void world_reset(world_t *w) {
     uint32_t seed = w->rng;  /* caller may pre-set seed; 0 = default */
     float *sig_buf = w->signal_cache.strength; /* preserve heap allocation */
@@ -5440,12 +5450,14 @@ void world_reset(world_t *w) {
              "Helios Works. Advanced smelting. Copper and crystal refined here.");
     w->station_count = 3; /* 3 starter stations */
 
-    /* Seed each starter station's chain log with its initial hail
-     * message + four authored rarity-tier events. See
-     * seed_station_motd_chain_events for the per-event shape and
-     * DEFAULT_STATION_TIER_TEXT for the tier flavor copy. */
-    for (int s = 0; s < 3; s++)
-        seed_station_motd_chain_events(w, &w->stations[s], s);
+    /* Genesis MOTD + tier events used to be emitted here, but doing so
+     * on every world_reset corrupted the chain log: load_world_state
+     * calls world_reset BEFORE world_load restores the saved seed, so
+     * MOTDs landed at the default-2037 station pubkey's file with
+     * prev_hash=0 every restart, breaking that chain forever. Seeding
+     * is now triggered explicitly on the fresh-world boot path
+     * (load_world_state and local_server_init) via
+     * world_seed_station_chain_genesis. */
 
     rebuild_signal_chain(w);
 

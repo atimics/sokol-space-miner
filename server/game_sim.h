@@ -469,6 +469,10 @@ typedef struct {
 
 float contract_price(const contract_t *c);
 void world_reset(world_t *w);
+/* Genesis MOTD/tier chain events for the seeded stations. Caller must
+ * invoke this only on a fresh-world boot (no save loaded), AFTER
+ * world_reset. See seed_station_motd_chain_events in game_sim.c. */
+void world_seed_station_chain_genesis(world_t *w);
 void world_cleanup(world_t *w);
 void world_sim_step(world_t *w, float dt);
 void world_sim_step_player_only(world_t *w, int player_idx, float dt);
