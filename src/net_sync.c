@@ -257,9 +257,20 @@ void apply_remote_hold_ingots(const NetNamedIngotEntry *entries, int count) {
 
 void apply_remote_inspect_snapshot(const NetInspectSnapshot *snapshot) {
     if (!snapshot) return;
-    g.inspect_snapshot = *snapshot;
-    g.inspect_snapshot_timer =
-        (snapshot->target_type == INSPECT_TARGET_NONE) ? 0.0f : 0.60f;
+
+    /* Linger: when the server reports no current target (player let
+     * the scan key go), keep the last frame's snapshot data and let
+     * the panel decay over a few seconds — gives the player time to
+     * read what they just locked onto. The active-scan tick refresh
+     * uses the shorter 0.6s timeout so that a still-locked target
+     * doesn't render the previous frame after the snapshot grows
+     * stale. */
+    if (snapshot->target_type == INSPECT_TARGET_NONE) {
+        g.inspect_snapshot_timer = 3.5f;
+    } else {
+        g.inspect_snapshot = *snapshot;
+        g.inspect_snapshot_timer = 0.60f;
+    }
 
     if (g.local_player_slot < 0 || g.local_player_slot >= MAX_PLAYERS) return;
     server_player_t *sp = &g.world.players[g.local_player_slot];

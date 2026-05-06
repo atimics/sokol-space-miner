@@ -537,7 +537,9 @@ static void hud_cargo_label(const uint8_t pub[32], char out[12]) {
 static void hud_draw_inspect_snapshot_pane(float screen_w, float screen_h) {
     if (g.inspect_snapshot_timer <= 0.0f) return;
     if (LOCAL_PLAYER.docked) return;
-    if (!LOCAL_PLAYER.scan_active) return;
+    /* The timer alone gates visibility — the panel lingers for a few
+     * seconds after scan release so the player can read what they
+     * just locked onto. */
     const NetInspectSnapshot *snap = &g.inspect_snapshot;
     if (snap->target_type != INSPECT_TARGET_NPC) return;
 

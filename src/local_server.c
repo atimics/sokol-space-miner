@@ -223,8 +223,19 @@ static void local_server_sync_inspect_snapshot(const local_server_t *ls,
     snap.dest_station = 0xFFu;
 
     if (!src->scan_active || src->scan_target_type == INSPECT_TARGET_NONE) {
-        g.inspect_snapshot = snap;
-        g.inspect_snapshot_timer = 0.0f;
+        /* Linger: hold the last snapshot's data on screen for a few
+         * seconds after the player releases the scan key. Active-scan
+         * frames refresh the timer to 0.60; seeing ≤ 0.60 here means
+         * we just hit the release edge and should bump up to the
+         * linger window. After that the timer counts down naturally —
+         * we mustn't reset it on every subsequent idle frame. */
+        bool had_target = g.inspect_snapshot.target_type != INSPECT_TARGET_NONE;
+        if (had_target && g.inspect_snapshot_timer <= 0.60f) {
+            g.inspect_snapshot_timer = 3.5f;
+        } else if (!had_target) {
+            g.inspect_snapshot = snap;
+            g.inspect_snapshot_timer = 0.0f;
+        }
         return;
     }
 
