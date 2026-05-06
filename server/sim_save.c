@@ -79,7 +79,12 @@ static uint32_t crc32_file(FILE *f) {
 }
 
 #define SAVE_MAGIC 0x5349474E  /* "SIGN" */
-#define SAVE_VERSION 53  /* Station receipt store:
+#define SAVE_VERSION 54  /* v54: world_seq added — monotonic u32 written
+                          * after belt_seed for total ordering across
+                          * worlds (newer-world-wins highscore policy).
+                          * Pre-v54 saves migrate by defaulting world_seq=0,
+                          * making them lose to any explicit world.
+                          * v53 was the station receipt store:
                           * each station manifest entry now carries a
                           * receipt-chain payload inline
                           * ([len:u8] + len * cargo_receipt_t), matching
@@ -1136,8 +1141,10 @@ bool world_save(const world_t *w, const char *path) {
     /* v37: belt_seed (anchor for rock_pub derivation). v38: each
      * destroyed_rocks entry now carries a destroyed_at_ms timestamp;
      * the array is kept sorted ascending by rock_pub, so writing in
-     * index order preserves order on read. Sparse: count + N tuples. */
+     * index order preserves order on read. Sparse: count + N tuples.
+     * v54: world_seq written immediately after belt_seed. */
     WRITE_FIELD(f, w->belt_seed);
+    WRITE_FIELD(f, w->world_seq);
     {
         uint16_t count = w->destroyed_rock_count;
         WRITE_FIELD(f, count);
@@ -1302,6 +1309,11 @@ bool world_load(world_t *w, const char *path) {
     w->destroyed_rock_count = 0;
     if (version >= 37) {
         READ_FIELD(f, w->belt_seed);
+        if (version >= 54) {
+            READ_FIELD(f, w->world_seq);
+        } else {
+            w->world_seq = 0;
+        }
         uint16_t count = 0;
         READ_FIELD(f, count);
         int cap = (int)(sizeof(w->destroyed_rocks) / sizeof(w->destroyed_rocks[0]));

@@ -58,7 +58,8 @@ enum {
     NET_MSG_STATION_MANIFEST   = 0x2F, /* server -> client: per-station manifest summary grouped by (commodity, grade) — see STATION_MANIFEST_* below. */
     NET_MSG_HIGHSCORES         = 0x30, /* server -> client: top-N leaderboard.
                                         * [type:1][count:1] + count × [callsign:8][credits_earned:f32]
-                                        * [world_id:u32][build_id:u32][epoch_tick:u64][killed_by:8] (36 bytes/entry) */
+                                        * [world_id:u32][world_seq:u32][build_id:u32][epoch_tick:u64]
+                                        * [killed_by:8] (40 bytes/entry) */
     NET_MSG_PLAYER_MANIFEST    = 0x31, /* server -> client: local player's ship manifest summary, same shape as STATION_MANIFEST minus station idx — see PLAYER_MANIFEST_* below. */
     NET_MSG_REGISTER_PUBKEY    = 0x32, /* client -> server: [type:1][pubkey:32]. Layer A.2 of #479 — sent once per
                                         * connection BEFORE NET_MSG_SESSION so the server can bind the pubkey to
@@ -209,9 +210,10 @@ typedef enum {
  * after every death. */
 enum {
     HIGHSCORE_TOP_N      = 10,
-    /* 8-byte callsign + f32 credits + u32 world_id + u32 build_id +
-     * u64 epoch_tick + 8-byte killed_by callsign = 36 bytes/entry. */
-    HIGHSCORE_ENTRY_SIZE = 36,
+    /* 8-byte callsign + f32 credits + u32 world_id + u32 world_seq +
+     * u32 build_id + u64 epoch_tick + 8-byte killed_by callsign
+     * = 40 bytes/entry. */
+    HIGHSCORE_ENTRY_SIZE = 40,
     HIGHSCORE_HEADER     = 2,    /* type + count */
 };
 

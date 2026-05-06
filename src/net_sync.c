@@ -288,6 +288,7 @@ void apply_remote_highscores(const NetHighscoreEntry *entries, int count) {
         memcpy(g.highscores[i].callsign, entries[i].callsign, 8);
         g.highscores[i].credits_earned = entries[i].credits_earned;
         g.highscores[i].world_id   = entries[i].world_id;
+        g.highscores[i].world_seq  = entries[i].world_seq;
         g.highscores[i].build_id   = entries[i].build_id;
         g.highscores[i].epoch_tick = entries[i].epoch_tick;
         memcpy(g.highscores[i].killed_by, entries[i].killed_by, 8);

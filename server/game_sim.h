@@ -402,6 +402,13 @@ typedef struct {
      * (NPC spawns, fracture children, etc.) but the belt + every
      * rock_pub derived from it are anchored to this fixed value. */
     uint32_t belt_seed;
+    /* world_seq: monotonic id for total ordering across worlds. Set to
+     * wall-clock time at fresh-world creation; preserved across normal
+     * server restarts via the save. Lets the leaderboard prefer
+     * newer-world runs over older-world runs deterministically (orphan
+     * chain logs without a WORLD_INFO event default to 0, the oldest
+     * possible). */
+    uint32_t world_seq;
     float time;
     float field_spawn_timer;
     float gravity_accumulator;  /* runs gravity at reduced rate */

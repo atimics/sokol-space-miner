@@ -13,6 +13,7 @@
 #include "station_authority.h"
 #include "sha256.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +75,34 @@ static void emit_death(world_t *w,
                          &d, (uint16_t)sizeof(d));
 }
 
+/* Emit a CHAIN_EVT_DEATH that already carries killed_by_callsign — the
+ * server's normal path resolves the killer at emit time. */
+static void emit_death_with_killer_callsign(world_t *w,
+                                            const char *callsign,
+                                            const uint8_t session_token[8],
+                                            const uint8_t killer_token[8],
+                                            const char *killer_callsign,
+                                            float credits_earned) {
+    chain_payload_death_t d;
+    memset(&d, 0, sizeof(d));
+    if (session_token) memcpy(d.victim_session_token, session_token, 8);
+    if (callsign) {
+        size_t n = strlen(callsign);
+        if (n > 8) n = 8;
+        memcpy(d.victim_callsign, callsign, n);
+    }
+    if (killer_token) memcpy(d.killer_token, killer_token, 8);
+    if (killer_callsign) {
+        size_t n = strlen(killer_callsign);
+        if (n > 8) n = 8;
+        memcpy(d.killed_by_callsign, killer_callsign, n);
+    }
+    d.credits_earned = credits_earned;
+    d.epoch_tick = (uint64_t)(w->time * 120.0);
+    (void)chain_log_emit(w, &w->stations[0], CHAIN_EVT_DEATH,
+                         &d, (uint16_t)sizeof(d));
+}
+
 /* Emit a BUILD_INFO operator post (kind=3, text=hex SHA). */
 static void emit_build_info(world_t *w, const char *hex) {
     size_t hl = strlen(hex);
@@ -89,18 +118,24 @@ static void emit_build_info(world_t *w, const char *hex) {
                          payload, (uint16_t)(38 + hl));
 }
 
-/* Emit a WORLD_INFO operator post (kind=4, text=belt_seed LE | hex). */
-static void emit_world_info(world_t *w, uint32_t seed_u32, const char *hex) {
+/* Emit a WORLD_INFO operator post (kind=4, text=belt_seed LE |
+ * world_seq LE | hex). */
+static void emit_world_info(world_t *w, uint32_t seed_u32,
+                            uint32_t world_seq, const char *hex) {
     size_t hl = strlen(hex);
-    if (hl > 60) hl = 60;
-    uint8_t text[64];
+    if (hl > 56) hl = 56;
+    uint8_t text[72];
     text[0] = (uint8_t)(seed_u32 & 0xFF);
     text[1] = (uint8_t)((seed_u32 >> 8) & 0xFF);
     text[2] = (uint8_t)((seed_u32 >> 16) & 0xFF);
     text[3] = (uint8_t)((seed_u32 >> 24) & 0xFF);
-    memcpy(&text[4], hex, hl);
-    size_t tl = 4 + hl;
-    uint8_t payload[38 + 64];
+    text[4] = (uint8_t)(world_seq & 0xFF);
+    text[5] = (uint8_t)((world_seq >> 8) & 0xFF);
+    text[6] = (uint8_t)((world_seq >> 16) & 0xFF);
+    text[7] = (uint8_t)((world_seq >> 24) & 0xFF);
+    memcpy(&text[8], hex, hl);
+    size_t tl = 8 + hl;
+    uint8_t payload[38 + 72];
     memset(payload, 0, sizeof(payload));
     payload[0] = 4;
     sha256_bytes(text, tl, &payload[4]);
@@ -133,7 +168,7 @@ TEST(test_chain_event_death_payload_size) {
     memcpy(&b, buf, sizeof(b));
 
     ASSERT(memcmp(&a, &b, sizeof(a)) == 0);
-    ASSERT(sizeof(chain_payload_death_t) == 88);
+    ASSERT(sizeof(chain_payload_death_t) == 96);
 }
 
 TEST(test_highscore_replay_from_chain) {
@@ -171,7 +206,7 @@ TEST(test_highscores_survive_world_reset) {
     wa->rng = 11111u;
     world_reset(wa);
     /* Emit WORLD_INFO so the entry carries an explicit world_id. */
-    emit_world_info(wa, wa->belt_seed, "aabbccdd");
+    emit_world_info(wa, wa->belt_seed, 100u, "aabbccdd");
     uint8_t tok_a[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
     emit_death(wa, "AYE", tok_a, NULL, 500.0f);
 
@@ -181,7 +216,7 @@ TEST(test_highscores_survive_world_reset) {
     ASSERT(wb != NULL);
     wb->rng = 22222u;
     world_reset(wb);
-    emit_world_info(wb, wb->belt_seed, "11223344");
+    emit_world_info(wb, wb->belt_seed, 200u, "11223344");
     uint8_t tok_b[8] = { 9, 8, 7, 6, 5, 4, 3, 2 };
     emit_death(wb, "BEE", tok_b, NULL, 800.0f);
 
@@ -264,11 +299,173 @@ TEST(test_build_info_tagged) {
     hs_test_teardown();
 }
 
+TEST(test_killer_resolved_at_emit) {
+    /* Death events emitted by the server now carry killed_by_callsign in
+     * the payload — replay reads it directly with no fallback map
+     * lookup. Confirm by emitting a single DEATH whose killer never
+     * dies (so the fallback map can't help) and asserting the killer
+     * callsign still surfaces. */
+    hs_test_setup("killer_at_emit");
+    WORLD_HEAP w = calloc(1, sizeof(world_t));
+    ASSERT(w != NULL);
+    w->rng = 1212u;
+    world_reset(w);
+
+    uint8_t victim_tok[8] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+    uint8_t killer_tok[8] = { 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8 };
+    emit_death_with_killer_callsign(w, "VICT-1", victim_tok, killer_tok,
+                                    "KILLR-9", 333.0f);
+
+    highscore_table_t t;
+    highscore_replay_from_chain(&t, chain_log_get_dir());
+
+    ASSERT_EQ_INT(t.count, 1);
+    char kb[9] = {0};
+    memcpy(kb, t.entries[0].killed_by, 8);
+    ASSERT_STR_EQ(kb, "KILLR-9");
+
+    hs_test_teardown();
+}
+
+TEST(test_most_recent_world_wins) {
+    hs_test_setup("recent_world_wins");
+
+    /* World A: an older world (smaller world_seq). Emit a high-credit
+     * run for ALPHA-9. */
+    WORLD_HEAP wa = calloc(1, sizeof(world_t));
+    ASSERT(wa != NULL);
+    wa->rng = 31415u;
+    world_reset(wa);
+    emit_world_info(wa, wa->belt_seed, 100u, "aabbccdd");
+    uint8_t tok_a[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    emit_death(wa, "ALPHA-9", tok_a, NULL, 5000.0f);
+
+    /* World B: newer world (greater world_seq). ALPHA-9 dies for less
+     * but the newer world should still take precedence. */
+    WORLD_HEAP wb = calloc(1, sizeof(world_t));
+    ASSERT(wb != NULL);
+    wb->rng = 27182u;
+    world_reset(wb);
+    emit_world_info(wb, wb->belt_seed, 200u, "11223344");
+    uint8_t tok_b[8] = { 9, 8, 7, 6, 5, 4, 3, 2 };
+    emit_death(wb, "ALPHA-9", tok_b, NULL, 100.0f);
+
+    highscore_table_t t;
+    highscore_replay_from_chain(&t, chain_log_get_dir());
+
+    /* Exactly one ALPHA-9 row, from world B (newer), even though its
+     * credits are lower — newer-world-wins. */
+    ASSERT_EQ_INT(t.count, 1);
+    ASSERT(memcmp(t.entries[0].callsign, "ALPHA-9", 7) == 0);
+    ASSERT_EQ_FLOAT(t.entries[0].credits_earned, 100.0f, 0.001f);
+    ASSERT(t.entries[0].world_seq == 200u);
+    ASSERT(t.entries[0].world_id == wb->belt_seed);
+
+    hs_test_teardown();
+}
+
+TEST(test_world_seed_persists_across_restart) {
+    /* world.sav round-trip preserves belt_seed and world_seq so a
+     * normal server restart keeps the same belt layout, station Ed25519
+     * pubkeys, and leaderboard ordering. */
+    WORLD_HEAP w = calloc(1, sizeof(world_t));
+    ASSERT(w != NULL);
+    w->rng = 4242u;
+    world_reset(w);
+    w->world_seq = 0xDEADBEEFu;
+    uint32_t expected_seed = w->belt_seed;
+    uint32_t expected_seq = w->world_seq;
+    ASSERT(world_save(w, TMP("ws_seed_persist.sav")));
+
+    WORLD_HEAP loaded = calloc(1, sizeof(world_t));
+    ASSERT(loaded != NULL);
+    loaded->rng = 999999u; /* deliberately different to prove load wins */
+    world_reset(loaded);
+    ASSERT(world_load(loaded, TMP("ws_seed_persist.sav")));
+
+    ASSERT(loaded->belt_seed == expected_seed);
+    ASSERT(loaded->world_seq == expected_seq);
+
+    remove(TMP("ws_seed_persist.sav"));
+}
+
+TEST(test_chain_log_survives_world_reset_resume) {
+    /* P1 regression: world_reset() must NOT delete chain log files at
+     * the current station pubkeys, because load_world_state calls it
+     * before world_load restores the saved belt_seed. Emitting a
+     * death, then world_reset()-ing on the same world struct, must
+     * leave the on-disk log intact so highscore replay still sees it. */
+    hs_test_setup("survive_resume");
+
+    WORLD_HEAP w = calloc(1, sizeof(world_t));
+    ASSERT(w != NULL);
+    w->rng = 2037u;
+    world_reset(w);
+    uint8_t tok[8] = { 'r','e','s','u','m','e','-','1' };
+    emit_death(w, "RESUME-1", tok, NULL, 9999.0f);
+
+    /* Simulate the server boot sequence: a second world_reset (matching
+     * load_world_state's pre-load reset) on a fresh world struct. The
+     * pubkey filename is the same because the seed is the same. */
+    WORLD_HEAP w2 = calloc(1, sizeof(world_t));
+    ASSERT(w2 != NULL);
+    w2->rng = 2037u;
+    world_reset(w2);
+
+    /* Replay must still see the death event from before the reset. */
+    highscore_table_t t;
+    highscore_replay_from_chain(&t, chain_log_get_dir());
+    ASSERT_EQ_INT(t.count, 1);
+    ASSERT(memcmp(t.entries[0].callsign, "RESUME-1", 8) == 0);
+
+    hs_test_teardown();
+}
+
+TEST(test_legacy_death_payload_replays) {
+    /* P2 regression: 88-byte DEATH events written before the
+     * killed_by_callsign field was added must still feed the
+     * leaderboard view. Replay accepts payloads down to
+     * offsetof(killed_by_callsign) and falls back to the victim-token
+     * map for killer attribution. */
+    hs_test_setup("legacy_payload");
+
+    WORLD_HEAP w = calloc(1, sizeof(world_t));
+    ASSERT(w != NULL);
+    w->rng = 88880u;
+    world_reset(w);
+
+    /* Build a payload truncated at the legacy boundary (88 bytes —
+     * everything before killed_by_callsign). */
+    chain_payload_death_t d;
+    memset(&d, 0, sizeof(d));
+    uint8_t vt[8] = { 'L','E','G','A','C','Y','-','1' };
+    memcpy(d.victim_session_token, vt, 8);
+    memcpy(d.victim_callsign, "LEGACY-1", 8);
+    d.credits_earned = 4242.0f;
+    d.epoch_tick = 1234ULL;
+    uint16_t legacy_len = (uint16_t)offsetof(chain_payload_death_t, killed_by_callsign);
+    ASSERT_EQ_INT(legacy_len, 88);
+    (void)chain_log_emit(w, &w->stations[0], CHAIN_EVT_DEATH, &d, legacy_len);
+
+    highscore_table_t t;
+    highscore_replay_from_chain(&t, chain_log_get_dir());
+    ASSERT_EQ_INT(t.count, 1);
+    ASSERT(memcmp(t.entries[0].callsign, "LEGACY-1", 8) == 0);
+    ASSERT_EQ_FLOAT(t.entries[0].credits_earned, 4242.0f, 0.001f);
+
+    hs_test_teardown();
+}
+
 void register_highscore_replay_tests(void) {
     TEST_SECTION("\nhighscore replay tests:\n");
     RUN(test_chain_event_death_payload_size);
     RUN(test_highscore_replay_from_chain);
     RUN(test_highscores_survive_world_reset);
     RUN(test_killer_callsign_resolved);
+    RUN(test_killer_resolved_at_emit);
+    RUN(test_most_recent_world_wins);
+    RUN(test_world_seed_persists_across_restart);
     RUN(test_build_info_tagged);
+    RUN(test_chain_log_survives_world_reset_resume);
+    RUN(test_legacy_death_payload_replays);
 }

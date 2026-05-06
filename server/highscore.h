@@ -24,6 +24,7 @@ typedef struct {
     float    credits_earned;
     /* Phase 2: world + build identity, killer attribution. */
     uint32_t world_id;           /* low 32 bits of belt_seed (or station-pub-derived for orphans) */
+    uint32_t world_seq;          /* monotonic world id; newer-world-wins dedup */
     uint32_t build_id;           /* low 32 bits of build SHA at run time */
     uint64_t epoch_tick;         /* sim tick at death */
     uint8_t  killed_by[8];       /* killer callsign, all-zero if unresolved */
@@ -34,17 +35,23 @@ typedef struct {
     int               count;
 } highscore_table_t;
 
-/* Submit a candidate run. Returns true if the table was mutated. */
+/* Submit a candidate run. Returns true if the table was mutated.
+ * Dedup is by callsign only: a newer world (greater world_seq) replaces
+ * any prior entry for the same callsign regardless of credits; same-seq
+ * resubmissions promote only when credits beat the existing score; an
+ * older world cannot displace a newer one. */
 bool highscore_submit(highscore_table_t *t,
                       const char *callsign, float credits_earned,
-                      uint32_t world_id, uint32_t build_id,
+                      uint32_t world_id, uint32_t world_seq,
+                      uint32_t build_id,
                       uint64_t epoch_tick, const uint8_t killed_by[8]);
 
 /* Walk every `*.log` file in `chain_dir`, parse death events out of each,
- * and project them into the leaderboard. Two-pass: first pass collects
- * a session_token -> callsign map (so a killer can be resolved to a
- * callsign by their later death event), second pass submits in
- * chronological order. The table is reset to empty before replay. */
+ * and project them into the leaderboard. Single-pass: each DEATH event
+ * carries its killer callsign directly (resolved at emit time). A
+ * fallback victim-token-to-callsign map is built first to fill in
+ * historical events that predate the killed_by_callsign field. The
+ * table is reset to empty before replay. */
 void highscore_replay_from_chain(highscore_table_t *t, const char *chain_dir);
 
 /* Serialize the table as a NET_MSG_HIGHSCORES packet. Returns bytes written.

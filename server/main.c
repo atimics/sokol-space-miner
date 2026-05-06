@@ -2041,6 +2041,26 @@ static void srv_on_death(const sim_event_t *ev) {
     server_player_t *sp = &world.players[pid];
     if (!sp->connected) return;
 
+    /* Resolve killer callsign by token against currently-connected
+     * peers BEFORE chain emit so the killed_by_callsign rides along on
+     * the persisted DEATH event. The replay walker reads it directly;
+     * legacy events without this field fall back to the victim-callsign
+     * map. */
+    uint8_t killed_by[8] = {0};
+    {
+        static const uint8_t zero[8] = {0};
+        if (memcmp(ev->death.killer_token, zero, 8) != 0) {
+            for (int i = 0; i < MAX_PLAYERS; i++) {
+                if (i == pid) continue;
+                if (memcmp(world.players[i].session_token,
+                           ev->death.killer_token, 8) == 0) {
+                    memcpy(killed_by, world.players[i].callsign, 8);
+                    break;
+                }
+            }
+        }
+    }
+
     /* Append the run to the chain log first so a crash between emit
      * and submit re-projects on next boot. Station 0 (Prospect) is the
      * deterministic authority for player-life events — the chain log
@@ -2059,33 +2079,20 @@ static void srv_on_death(const sim_event_t *ev) {
         dp.credits_spent = ev->death.credits_spent;
         dp.ore_mined = ev->death.ore_mined;
         dp.asteroids_fractured = (uint32_t)ev->death.asteroids_fractured;
+        memcpy(dp.killed_by_callsign, killed_by, 8);
         if (station_exists(&world.stations[0]))
             (void)chain_log_emit(&world, &world.stations[0],
                                  CHAIN_EVT_DEATH, &dp, (uint16_t)sizeof(dp));
     }
 
     const char *cs = sp->callsign;
-    /* Resolve killer callsign by token against currently-connected
-     * peers; replay-from-chain handles the historical case. */
-    uint8_t killed_by[8] = {0};
-    {
-        static const uint8_t zero[8] = {0};
-        if (memcmp(ev->death.killer_token, zero, 8) != 0) {
-            for (int i = 0; i < MAX_PLAYERS; i++) {
-                if (i == pid) continue;
-                if (memcmp(world.players[i].session_token,
-                           ev->death.killer_token, 8) == 0) {
-                    memcpy(killed_by, world.players[i].callsign, 8);
-                    break;
-                }
-            }
-        }
-    }
     uint32_t world_id = world.belt_seed;
+    uint32_t world_seq = world.world_seq;
     uint32_t build_id = signal_build_id_u32();
     uint64_t epoch_tick = (uint64_t)(world.time * 120.0);
     bool qualified = highscore_submit(&highscores, cs, ev->death.credits_earned,
-                                      world_id, build_id, epoch_tick, killed_by);
+                                      world_id, world_seq, build_id,
+                                      epoch_tick, killed_by);
     printf("[server] death pid=%d cs=%s earned=%.0f cr -> %s (top=%d)\n",
            pid, cs[0] ? cs : "?", ev->death.credits_earned,
            qualified ? "qualified" : "skipped", highscores.count);
@@ -2237,15 +2244,24 @@ static void emit_world_identity_anchor(void);
  *   3. Session snapshot overlays economy state
  *   4. Rebuild derived structures (signal chain, station nav, hash chain) */
 static void load_world_state(void) {
-    /* Rotate the belt seed (and therefore the seeded stations'
-     * Ed25519 pubkeys) on every fresh boot so old chain log files
-     * survive on disk under their previous filenames as orphans —
-     * highscore_replay_from_chain projects them into the leaderboard
-     * view alongside the new world's deaths. world_load() below will
-     * overwrite belt_seed if the persisted save carries one (#285),
-     * so resumed sessions keep their identity stable. */
-    world.rng = (uint32_t)time(NULL);
-    if (!world.rng) world.rng = 2037u;
+    /* Belt seed is persistent across normal restarts: rotate only when
+     * world.sav is absent (true first boot of a fresh world). On a
+     * resume, world_load below overwrites belt_seed and world_seq with
+     * the persisted values so asteroid layout, station Ed25519 pubkeys,
+     * and the leaderboard's world ordering all stay stable. */
+    bool fresh_world = false;
+    {
+        FILE *probe = fopen(SAVE_PATH, "rb");
+        if (probe) {
+            fclose(probe);
+        } else {
+            fresh_world = true;
+        }
+    }
+    if (fresh_world) {
+        world.rng = (uint32_t)time(NULL);
+        if (!world.rng) world.rng = 2037u;
+    }
     world_reset(&world);
 
     int catalog_count = station_catalog_load_all(world.stations, MAX_STATIONS,
@@ -2254,9 +2270,15 @@ static void load_world_state(void) {
         printf("[server] loaded %d station(s) from catalog\n", catalog_count);
 
     if (world_load(&world, SAVE_PATH)) {
-        printf("[server] loaded session from %s\n", SAVE_PATH);
+        printf("[server] loaded session from %s (belt_seed=%u world_seq=%u)\n",
+               SAVE_PATH, world.belt_seed, world.world_seq);
     } else {
-        printf("[server] no session save -- fresh economy\n");
+        /* fresh_world above already rotated rng; stamp world_seq from the
+         * wall clock so cross-wipe ordering is monotonic too. */
+        world.world_seq = (uint32_t)time(NULL);
+        if (!world.world_seq) world.world_seq = 1u;
+        printf("[server] no session save -- fresh economy (belt_seed=%u world_seq=%u)\n",
+               world.belt_seed, world.world_seq);
         /* Stations are sovereign currency issuers; no seed pool. The
          * pool just tracks net issuance from genesis. */
         world_seed_station_manifests(&world);
@@ -2340,18 +2362,25 @@ static void emit_world_identity_anchor(void) {
                              CHAIN_EVT_OPERATOR_POST,
                              payload, (uint16_t)(38 + hash_len));
     }
-    /* WORLD_INFO: text = belt_seed (4 LE) || build SHA. */
+    /* WORLD_INFO: text = belt_seed (4 LE) || world_seq (4 LE) || build SHA.
+     * world_seq lets the highscore replay pick the most-recent world's
+     * runs over older ones. Pre-v52 emits had only belt_seed; the parser
+     * detects the legacy form by text_len < 8 and defaults world_seq=0. */
     {
-        uint8_t payload[38 + 4 + 64];
+        uint8_t payload[38 + 8 + 64];
         memset(payload, 0, sizeof(payload));
         payload[0] = 4; /* kind = WORLD_INFO */
-        size_t text_len = 4 + hash_len;
-        uint8_t text[4 + 64];
+        size_t text_len = 8 + hash_len;
+        uint8_t text[8 + 64];
         text[0] = (uint8_t)(world.belt_seed & 0xFF);
         text[1] = (uint8_t)((world.belt_seed >> 8) & 0xFF);
         text[2] = (uint8_t)((world.belt_seed >> 16) & 0xFF);
         text[3] = (uint8_t)((world.belt_seed >> 24) & 0xFF);
-        memcpy(&text[4], hash, hash_len);
+        text[4] = (uint8_t)(world.world_seq & 0xFF);
+        text[5] = (uint8_t)((world.world_seq >> 8) & 0xFF);
+        text[6] = (uint8_t)((world.world_seq >> 16) & 0xFF);
+        text[7] = (uint8_t)((world.world_seq >> 24) & 0xFF);
+        memcpy(&text[8], hash, hash_len);
         sha256_bytes(text, text_len, &payload[4]);
         payload[36] = (uint8_t)(text_len & 0xFF);
         payload[37] = (uint8_t)((text_len >> 8) & 0xFF);

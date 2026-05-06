@@ -348,6 +348,7 @@ typedef struct {
         char     callsign[8];
         float    credits_earned;
         uint32_t world_id;
+        uint32_t world_seq;
         uint32_t build_id;
         uint64_t epoch_tick;
         uint8_t  killed_by[8];

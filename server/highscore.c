@@ -4,6 +4,7 @@
 #include "sha256.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,29 +41,31 @@ static void write_f32_le(uint8_t *p, float f) {
 
 bool highscore_submit(highscore_table_t *t,
                       const char *callsign, float credits_earned,
-                      uint32_t world_id, uint32_t build_id,
+                      uint32_t world_id, uint32_t world_seq,
+                      uint32_t build_id,
                       uint64_t epoch_tick, const uint8_t killed_by[8])
 {
     if (!t) return false;
     if (!isfinite(credits_earned) || credits_earned < 0.0f) return false;
 
-    /* Dedup by (callsign, world_id): a player can hold one row per
-     * world. Promotion replaces the old entry only when the new run
-     * scores strictly higher. Different worlds keep distinct rows so
-     * the leaderboard reflects history across resets. */
+    /* Dedup by callsign only. Newer world (greater world_seq) replaces
+     * any prior entry regardless of credits; same-seq runs promote only
+     * on a strictly higher score; older worlds never displace newer. */
     if (callsign && callsign[0]) {
         size_t cn = cs_len(callsign, sizeof(t->entries[0].callsign));
         for (int i = 0; i < t->count; i++) {
             size_t en = cs_len(t->entries[i].callsign,
                                 sizeof(t->entries[i].callsign));
-            if (en == cn && memcmp(t->entries[i].callsign, callsign, cn) == 0
-                && t->entries[i].world_id == world_id) {
-                if (credits_earned <= t->entries[i].credits_earned) return false;
-                for (int j = i; j < t->count - 1; j++) t->entries[j] = t->entries[j + 1];
-                t->count--;
-                memset(&t->entries[t->count], 0, sizeof(t->entries[t->count]));
-                break;
-            }
+            if (en != cn || memcmp(t->entries[i].callsign, callsign, cn) != 0)
+                continue;
+            uint32_t cur_seq = t->entries[i].world_seq;
+            if (world_seq < cur_seq) return false;
+            if (world_seq == cur_seq &&
+                credits_earned <= t->entries[i].credits_earned) return false;
+            for (int j = i; j < t->count - 1; j++) t->entries[j] = t->entries[j + 1];
+            t->count--;
+            memset(&t->entries[t->count], 0, sizeof(t->entries[t->count]));
+            break;
         }
     }
 
@@ -83,6 +86,7 @@ bool highscore_submit(highscore_table_t *t,
     }
     e->credits_earned = credits_earned;
     e->world_id = world_id;
+    e->world_seq = world_seq;
     e->build_id = build_id;
     e->epoch_tick = epoch_tick;
     if (killed_by) memcpy(e->killed_by, killed_by, 8);
@@ -99,9 +103,10 @@ int highscore_serialize(uint8_t *buf, const highscore_table_t *t) {
         memcpy(p, t->entries[i].callsign, 8);
         write_f32_le(&p[8], t->entries[i].credits_earned);
         write_u32_le(&p[12], t->entries[i].world_id);
-        write_u32_le(&p[16], t->entries[i].build_id);
-        write_u64_le(&p[20], t->entries[i].epoch_tick);
-        memcpy(&p[28], t->entries[i].killed_by, 8);
+        write_u32_le(&p[16], t->entries[i].world_seq);
+        write_u32_le(&p[20], t->entries[i].build_id);
+        write_u64_le(&p[24], t->entries[i].epoch_tick);
+        memcpy(&p[32], t->entries[i].killed_by, 8);
     }
     return HIGHSCORE_HEADER + t->count * HIGHSCORE_ENTRY_SIZE;
 }
@@ -144,7 +149,7 @@ static int chain_log_walk_events(FILE *f, chain_walk_cb cb, void *user) {
     return count;
 }
 
-/* ------------- Pass 1: collect token -> callsign map ------------- */
+/* ------------- token -> victim-callsign fallback map ------------- */
 
 typedef struct {
     uint8_t token[8];
@@ -161,8 +166,7 @@ static void token_map_set(token_map_t *m, const uint8_t token[8],
                           const uint8_t callsign[8]) {
     static const uint8_t zero[8] = {0};
     if (memcmp(token, zero, 8) == 0) return;
-    /* First-write-wins: stable mapping if a token gets reused (shouldn't
-     * happen, but defensive). */
+    /* First-write-wins: stable mapping if a token gets reused. */
     for (int i = 0; i < m->count; i++) {
         if (memcmp(m->entries[i].token, token, 8) == 0) return;
     }
@@ -197,28 +201,30 @@ static void map_collect_cb(uint8_t type, const uint8_t *payload,
                            void *user) {
     (void)epoch_tick;
     if (type != CHAIN_EVT_DEATH) return;
-    if (payload_len < sizeof(chain_payload_death_t) || !payload) return;
+    /* Legacy 88-byte payloads predate killed_by_callsign; victim_*
+     * fields sit before that offset and are valid in both layouts. */
+    if (payload_len < offsetof(chain_payload_death_t, killed_by_callsign) || !payload) return;
     const chain_payload_death_t *d = (const chain_payload_death_t *)payload;
     token_map_set((token_map_t *)user, d->victim_session_token, d->victim_callsign);
 }
 
-/* ------------- Pass 2: project death events ------------- */
+/* ------------- Project death events ------------- */
 
 typedef struct {
     highscore_table_t *table;
     const token_map_t *map;
     /* World identity cursor: last WORLD_INFO operator post seen in this
-     * file determines the world_id assigned to subsequent deaths.
-     * If no WORLD_INFO is seen before a DEATH, fallback_world_id
-     * (derived from the filename pubkey) is used. */
+     * file determines the world_id / world_seq assigned to subsequent
+     * deaths. If no WORLD_INFO is seen before a DEATH,
+     * fallback_world_id (derived from the filename pubkey) is used and
+     * world_seq stays 0 (oldest possible). */
     uint32_t cursor_world_id;
+    uint32_t cursor_world_seq;
     uint32_t cursor_build_id;
     bool     world_info_seen;
     uint32_t fallback_world_id;
 } replay_ctx_t;
 
-/* Reads operator_post payloads of kind=BUILD_INFO / WORLD_INFO and
- * updates the cursor; submits death events using the current cursor. */
 static void replay_event_cb(uint8_t type, const uint8_t *payload,
                             uint16_t payload_len, uint64_t epoch_tick,
                             void *user) {
@@ -247,17 +253,29 @@ static void replay_event_cb(uint8_t type, const uint8_t *payload,
             }
             r->cursor_build_id = bid;
         } else if (kind == 4) {
-            /* WORLD_INFO: 4 bytes belt_seed (LE) followed by build hex. */
+            /* WORLD_INFO. Modern emit: belt_seed:u32 LE || world_seq:u32 LE
+             * || build hex. Pre-v52 emit: belt_seed:u32 LE || build hex
+             * (text_len < 8 means world_seq absent → default 0). */
             if (text_len >= 4) {
                 r->cursor_world_id = (uint32_t)text[0]
                     | ((uint32_t)text[1] << 8)
                     | ((uint32_t)text[2] << 16)
                     | ((uint32_t)text[3] << 24);
                 r->world_info_seen = true;
+                int hex_start = 4;
+                if (text_len >= 8) {
+                    r->cursor_world_seq = (uint32_t)text[4]
+                        | ((uint32_t)text[5] << 8)
+                        | ((uint32_t)text[6] << 16)
+                        | ((uint32_t)text[7] << 24);
+                    hex_start = 8;
+                } else {
+                    r->cursor_world_seq = 0;
+                }
                 /* Optional trailing build hex. */
                 uint32_t bid = 0;
                 int hex_count = 0;
-                for (int i = 4; i < text_len && hex_count < 8; i++) {
+                for (int i = hex_start; i < text_len && hex_count < 8; i++) {
                     char c = (char)text[i];
                     int v = -1;
                     if (c >= '0' && c <= '9') v = c - '0';
@@ -273,7 +291,10 @@ static void replay_event_cb(uint8_t type, const uint8_t *payload,
         return;
     }
     if (type != CHAIN_EVT_DEATH) return;
-    if (payload_len < sizeof(chain_payload_death_t) || !payload) return;
+    /* Legacy 88-byte payloads predate killed_by_callsign. Accept them
+     * down to the offset of that field; everything before it is
+     * binary-compatible with the widened layout. */
+    if (payload_len < offsetof(chain_payload_death_t, killed_by_callsign) || !payload) return;
 
     const chain_payload_death_t *d = (const chain_payload_death_t *)payload;
     char callsign[9] = {0};
@@ -281,13 +302,20 @@ static void replay_event_cb(uint8_t type, const uint8_t *payload,
     callsign[8] = '\0';
 
     uint8_t killed_by[8] = {0};
-    (void)token_map_get(r->map, d->killer_token, killed_by);
+    static const uint8_t zero8[8] = {0};
+    if (payload_len >= sizeof(chain_payload_death_t)) {
+        memcpy(killed_by, d->killed_by_callsign, 8);
+    }
+    if (memcmp(killed_by, zero8, 8) == 0) {
+        (void)token_map_get(r->map, d->killer_token, killed_by);
+    }
 
     uint32_t world_id = r->world_info_seen ? r->cursor_world_id : r->fallback_world_id;
+    uint32_t world_seq = r->world_info_seen ? r->cursor_world_seq : 0u;
     uint32_t build_id = r->cursor_build_id;
 
     (void)highscore_submit(r->table, callsign, d->credits_earned,
-                           world_id, build_id,
+                           world_id, world_seq, build_id,
                            epoch_tick != 0 ? epoch_tick : d->epoch_tick,
                            killed_by);
 }
@@ -347,34 +375,35 @@ static void iterate_log_dir(const char *chain_dir, log_dir_cb cb, void *user) {
 #endif
 }
 
-/* Pass 1 callback: open file and walk for token/callsign collection. */
+/* Map-build pass: open file and walk for victim-token/callsign collection. */
 typedef struct {
     token_map_t *map;
-} pass1_user_t;
+} pass_map_user_t;
 
-static void pass1_cb(const char *full_path, const char *base_name, void *user) {
+static void pass_map_cb(const char *full_path, const char *base_name, void *user) {
     (void)base_name;
-    pass1_user_t *p = (pass1_user_t *)user;
+    pass_map_user_t *p = (pass_map_user_t *)user;
     FILE *f = fopen(full_path, "rb");
     if (!f) return;
     (void)chain_log_walk_events(f, map_collect_cb, p->map);
     fclose(f);
 }
 
-/* Pass 2 callback: open file and walk for death-event projection. */
+/* Projection pass: open file and walk for death-event projection. */
 typedef struct {
     highscore_table_t *table;
     const token_map_t *map;
-} pass2_user_t;
+} pass_replay_user_t;
 
-static void pass2_cb(const char *full_path, const char *base_name, void *user) {
-    pass2_user_t *p = (pass2_user_t *)user;
+static void pass_replay_cb(const char *full_path, const char *base_name, void *user) {
+    pass_replay_user_t *p = (pass_replay_user_t *)user;
     FILE *f = fopen(full_path, "rb");
     if (!f) return;
     replay_ctx_t r = {
         .table = p->table,
         .map = p->map,
         .cursor_world_id = 0,
+        .cursor_world_seq = 0,
         .cursor_build_id = 0,
         .world_info_seen = false,
         .fallback_world_id = fallback_world_id_from_name(base_name),
@@ -388,12 +417,16 @@ void highscore_replay_from_chain(highscore_table_t *t, const char *chain_dir) {
     memset(t, 0, sizeof(*t));
     if (!chain_dir || !chain_dir[0]) return;
 
+    /* Build a victim-token → callsign fallback map for legacy DEATH
+     * events that didn't carry killed_by_callsign in the payload. New
+     * events ride with their killer callsign attached and never consult
+     * the map. */
     token_map_t map = {0};
-    pass1_user_t p1 = { .map = &map };
-    iterate_log_dir(chain_dir, pass1_cb, &p1);
+    pass_map_user_t pm = { .map = &map };
+    iterate_log_dir(chain_dir, pass_map_cb, &pm);
 
-    pass2_user_t p2 = { .table = t, .map = &map };
-    iterate_log_dir(chain_dir, pass2_cb, &p2);
+    pass_replay_user_t pr = { .table = t, .map = &map };
+    iterate_log_dir(chain_dir, pass_replay_cb, &pr);
 
     free(map.entries);
 }

@@ -142,8 +142,9 @@ SIGNAL_PACK_PUSH
 typedef struct {
     uint8_t  kind;            /* 0=HAIL_MOTD, 1=CONTRACT_FLAVOR, 2=RARITY_TIER,
                                * 3=BUILD_INFO (text=8-hex-char build SHA, ref_id unused),
-                               * 4=WORLD_INFO (ref_id low 16 of belt_seed, text=hex of belt_seed,
-                               *               followed by build SHA),
+                               * 4=WORLD_INFO (text = belt_seed:u32 LE || world_seq:u32 LE
+                               *               || build SHA hex; pre-v52 emits omit world_seq
+                               *               and the parser defaults it to 0),
                                * reserved 5-255 */
     uint8_t  tier;            /* for kind=RARITY_TIER: 0=common,1=uncommon,2=rare,3=ultra */
     uint16_t ref_id;          /* contract id, motd seed, etc. — kind-specific */
@@ -199,7 +200,11 @@ SIGNAL_PACK_POP
  * separate highscores.dat anymore. victim_pubkey is zeroed for legacy
  * (un-registered) clients; victim_session_token is always populated.
  * killer_token is the killer's session_token (zero if unattributed /
- * NPC / self). */
+ * NPC / self). killed_by_callsign is resolved against the connected
+ * players list at emit time — leaves the field zero for NPC kills,
+ * disconnected players, or self-destructs. The replay walker reads
+ * this field directly; the legacy victim-callsign-map fallback only
+ * kicks in for events emitted before this field existed. */
 SIGNAL_PACK_PUSH
 typedef struct {
     uint8_t  victim_pubkey[32];        /* 0 for legacy clients */
@@ -213,6 +218,7 @@ typedef struct {
     float    credits_spent;
     float    ore_mined;
     uint32_t asteroids_fractured;
+    uint8_t  killed_by_callsign[8];    /* resolved at emit; 0 if unattributed */
 } SIGNAL_PACKED chain_payload_death_t;
 SIGNAL_PACK_POP
 
@@ -226,7 +232,7 @@ _Static_assert(sizeof(chain_payload_trade_t)            == 48,  "trade payload s
 _Static_assert(sizeof(chain_payload_rock_destroy_t)     == 96,  "rock_destroy payload size");
 _Static_assert(sizeof(chain_payload_fragment_tow_t)     == 80,  "fragment_tow payload size");
 _Static_assert(sizeof(chain_payload_fragment_release_t) == 88,  "fragment_release payload size");
-_Static_assert(sizeof(chain_payload_death_t)            == 88,  "death payload size");
+_Static_assert(sizeof(chain_payload_death_t)            == 96,  "death payload size");
 /* The fixed-prefix size (before the text[] variable-length array):
  * kind(1) + tier(1) + ref_id(2) + text_sha256(32) + text_len(2) = 38 bytes */
 _Static_assert(offsetof(chain_payload_operator_post_t, text) == 38, "operator_post fixed-prefix size");

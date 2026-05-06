@@ -5273,15 +5273,12 @@ void world_reset(world_t *w) {
                                        (uint32_t)s);
 
     /* In-memory chain state is implicitly zero from the memset above.
-     * Defensive: also remove any existing chain file at the new pubkey's
-     * path. Should be a no-op when belt_seed actually rotated (the
-     * pubkey is fresh, no file exists), but if the seed repeats — test
-     * fixtures, save load with persisted seed — we'd otherwise pick up
-     * an orphaned tail and chain emit's prev_hash linkage would fail.
-     * Prior worlds' files at *different* pubkey filenames survive and
-     * feed the highscore replay. */
-    for (int s = 0; s < 3; s++)
-        chain_log_reset(&w->stations[s]);
+     * Do NOT delete chain log files here — world_reset is called as
+     * part of every load path before the saved belt_seed is restored,
+     * so deleting the current-pubkey log file would clobber the saved
+     * game's history. Fresh-world setup (true first boot, test
+     * fixtures resetting state) calls world_chain_logs_reset()
+     * explicitly after the seed is settled. */
 
     /* --- Stations ---
      *
