@@ -129,6 +129,7 @@ set(SIGNAL_CLIENT_SOURCES
     src/net.c
     src/station_ui.c
     src/hud.c
+    src/inspect_anim.c
     src/world_draw.c
     src/audio.c
     src/asteroid_field.c
@@ -241,6 +242,8 @@ if(NOT EMSCRIPTEN AND NOT BUILD_SERVER_ONLY)
         src/tests/test_motd_rarity.c
         src/tests/test_cargo_lineage.c
         src/tests/test_trade_paging.c
+        src/tests/test_inspect_anim.c
+        src/inspect_anim.c
         src/identity.c
         ${SIGNAL_SIM_SOURCES}
         ${SIGNAL_SIM_HELPERS}
