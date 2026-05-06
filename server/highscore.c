@@ -8,6 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+static size_t cs_len(const char *s, size_t cap) {
+    size_t n = 0;
+    while (n < cap && s[n]) n++;
+    return n;
+}
+
 #if defined(_WIN32)
 #  include <windows.h>
 #else
@@ -45,9 +51,9 @@ bool highscore_submit(highscore_table_t *t,
      * scores strictly higher. Different worlds keep distinct rows so
      * the leaderboard reflects history across resets. */
     if (callsign && callsign[0]) {
-        size_t cn = strnlen(callsign, sizeof(t->entries[0].callsign));
+        size_t cn = cs_len(callsign, sizeof(t->entries[0].callsign));
         for (int i = 0; i < t->count; i++) {
-            size_t en = strnlen(t->entries[i].callsign,
+            size_t en = cs_len(t->entries[i].callsign,
                                 sizeof(t->entries[i].callsign));
             if (en == cn && memcmp(t->entries[i].callsign, callsign, cn) == 0
                 && t->entries[i].world_id == world_id) {
@@ -72,7 +78,7 @@ bool highscore_submit(highscore_table_t *t,
     highscore_entry_t *e = &t->entries[ins];
     memset(e, 0, sizeof(*e));
     if (callsign) {
-        size_t n = strnlen(callsign, sizeof(e->callsign));
+        size_t n = cs_len(callsign, sizeof(e->callsign));
         memcpy(e->callsign, callsign, n);
     }
     e->credits_earned = credits_earned;
