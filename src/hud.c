@@ -540,49 +540,31 @@ static void hud_cargo_label(const uint8_t pub[32], char out[12]) {
  * as a random glyph and resolves to its true value at t0 + i * stagger.
  * Once settled, the chars stay still — this is not a perpetual jitter.
  *
- * Three alphabets: hex (for receipt-hash short labels — well, base58
- * actually, since the codebase already calls it "hash short label" but
- * mining_callsign_from_pubkey emits base58), base58 alphanumerics minus
- * the visually ambiguous 0/O/I/l (cargo callsigns), and pure alpha
- * (rarity labels). We thread the alphabet through so the scramble and
- * the truth share a character class — the eye sees a settled row when
- * the glyphs stop swapping, not when they switch character class. */
+ * The codebase calls it "hash short label" but mining_callsign_from_pubkey
+ * emits base58 — that's the only alphabet we scramble over today, so
+ * the truth and the in-flight glyphs share a character class. */
 #define HUD_SCRAMBLE_TOTAL_MS    250.0f   /* full settle time per row */
 #define HUD_SCRAMBLE_STAGGER_MS   30.0f   /* per-character delay */
 
-typedef enum {
-    HUD_GLYPHS_HEX,
-    HUD_GLYPHS_BASE58,
-    HUD_GLYPHS_ALPHA,
-} hud_glyphs_t;
-
-static char hud_random_glyph(hud_glyphs_t set, uint32_t *rng) {
+static char hud_random_glyph(uint32_t *rng) {
     /* tiny xorshift so the scramble is stable per-frame for the same
      * t but different across (row, char_index, frame). */
     uint32_t x = *rng;
     x ^= x << 13; x ^= x >> 17; x ^= x << 5;
     *rng = x ? x : 0xDEADBEEFu;
-    static const char hex[]    = "0123456789abcdef";
-    static const char b58[]    = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    static const char alpha[]  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    const char *src; size_t n;
-    switch (set) {
-    case HUD_GLYPHS_HEX:    src = hex;   n = sizeof(hex)   - 1; break;
-    case HUD_GLYPHS_BASE58: src = b58;   n = sizeof(b58)   - 1; break;
-    case HUD_GLYPHS_ALPHA:
-    default:                src = alpha; n = sizeof(alpha) - 1; break;
-    }
-    return src[x % n];
+    static const char b58[] =
+        "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    return b58[x % (sizeof(b58) - 1)];
 }
 
 /* Render `truth` (null-terminated) into `out` (cap bytes), scrambling
- * unsettled chars from the alphabet `set`. `phase_ms` is ms since the
- * row's animation t0. `lock` is a bitmask of char positions that should
- * NEVER scramble (e.g. the literal "M-" prefix on a cargo callsign).
- * Char i settles at i*HUD_SCRAMBLE_STAGGER_MS. After
- * HUD_SCRAMBLE_TOTAL_MS the whole string is the truth. */
+ * unsettled chars from the base58 alphabet. `phase_ms` is ms since the
+ * row's animation t0. `lock` is a bitmask (positions 0..31) of char
+ * indices that should NEVER scramble (e.g. the literal "M-" prefix on
+ * a cargo callsign). Char i settles at i*HUD_SCRAMBLE_STAGGER_MS;
+ * after HUD_SCRAMBLE_TOTAL_MS the whole string is the truth. */
 static void hud_scramble_into(char *out, size_t cap,
-                              const char *truth, hud_glyphs_t set,
+                              const char *truth,
                               float phase_ms, uint32_t lock_mask, uint32_t seed) {
     if (cap == 0) return;
     size_t L = strlen(truth);
@@ -594,13 +576,13 @@ static void hud_scramble_into(char *out, size_t cap,
             out[i] = truth[i];
             continue;
         }
-        /* Mid-flight: emit a random glyph from the matching alphabet.
-         * The rng seed mixes (row, char_index, phase) so successive
-         * frames cycle through different glyphs, but a given (row,
-         * char, frame) is deterministic — no per-frame RAND state. */
+        /* Mid-flight: emit a random glyph. The rng seed mixes (row,
+         * char_index, phase) so successive frames cycle through
+         * different glyphs, but a given (row, char, frame) is
+         * deterministic — no per-frame RAND state. */
         uint32_t rng = seed ^ ((uint32_t)i * 0x9E3779B1u)
                             ^ (uint32_t)(phase_ms * 1.7f);
-        out[i] = hud_random_glyph(set, &rng);
+        out[i] = hud_random_glyph(&rng);
     }
     out[L] = '\0';
 }
@@ -758,7 +740,7 @@ static void hud_draw_inspect_snapshot_pane(float screen_w, float screen_h) {
             uint32_t lock = hud_cargo_prefix_lock(cargo);
             uint32_t seed = (uint32_t)(sig & 0xffffffffu) ^ 0xC0FFEEu;
             hud_scramble_into(cargo_disp, sizeof(cargo_disp), cargo,
-                              HUD_GLYPHS_BASE58, row_phase_ms, lock, seed);
+                              row_phase_ms, lock, seed);
         }
         sdtx_pos(px / cell, y / cell);
         sdtx_color4b(rr, gg, bb, a8_label);
@@ -795,11 +777,11 @@ static void hud_draw_inspect_snapshot_pane(float screen_w, float screen_h) {
                  * 7-char hash scrambles independently. */
                 char a_origin[8], a_latest[8], a_head[8];
                 hud_scramble_into(a_origin, sizeof(a_origin), origin,
-                                  HUD_GLYPHS_BASE58, phase_ms, 0, seed ^ 1u);
+                                  phase_ms,0, seed ^ 1u);
                 hud_scramble_into(a_latest, sizeof(a_latest), latest,
-                                  HUD_GLYPHS_BASE58, phase_ms, 0, seed ^ 2u);
+                                  phase_ms,0, seed ^ 2u);
                 hud_scramble_into(a_head, sizeof(a_head), head,
-                                  HUD_GLYPHS_BASE58, phase_ms, 0, seed ^ 3u);
+                                  phase_ms,0, seed ^ 3u);
                 sdtx_printf("chain %u  %s>%s  head %s  ev %llu",
                             (unsigned)row->chain_len, a_origin, a_latest,
                             a_head, (unsigned long long)row->event_id);
@@ -809,7 +791,7 @@ static void hud_draw_inspect_snapshot_pane(float screen_w, float screen_h) {
                 hud_station_name_for_pubkey(row->origin_station, name, sizeof(name));
                 char disp[24];
                 hud_scramble_into(disp, sizeof(disp), name,
-                                  HUD_GLYPHS_BASE58, phase_ms, 0, seed ^ 4u);
+                                  phase_ms,0, seed ^ 4u);
                 sdtx_printf("chain %u  origin: %s",
                             (unsigned)row->chain_len, disp);
             } else {
@@ -818,7 +800,7 @@ static void hud_draw_inspect_snapshot_pane(float screen_w, float screen_h) {
                 hud_station_name_for_pubkey(row->latest_station, name, sizeof(name));
                 char disp[24];
                 hud_scramble_into(disp, sizeof(disp), name,
-                                  HUD_GLYPHS_BASE58, phase_ms, 0, seed ^ 5u);
+                                  phase_ms,0, seed ^ 5u);
                 sdtx_printf("chain %u  latest: %s",
                             (unsigned)row->chain_len, disp);
             }

@@ -74,6 +74,26 @@ TEST(test_inspect_row_signature_diff_on_grouped_flag) {
     ASSERT(hud_row_signature(&a) != hud_row_signature(&b));
 }
 
+TEST(test_inspect_row_signature_diff_on_event_id_high_bits) {
+    /* Regression: the signature must mix all 8 bytes of event_id. An
+     * earlier draft only fed the bottom 16 bits in, which meant two
+     * distinct events colliding on those bits would suppress the
+     * row's scramble re-trigger. */
+    NetInspectSnapshotRow a, b;
+    seed_row(&a);
+    memcpy(&b, &a, sizeof(b));
+    b.event_id = a.event_id ^ ((uint64_t)1u << 40);
+    ASSERT(hud_row_signature(&a) != hud_row_signature(&b));
+    /* Also a low-byte-aliased pair — same low 16 bits, different
+     * upper bits — must hash differently. */
+    NetInspectSnapshotRow c, d;
+    seed_row(&c);
+    seed_row(&d);
+    c.event_id = 0x0000000000004422ull;
+    d.event_id = 0xDEADBEEF00004422ull;
+    ASSERT(hud_row_signature(&c) != hud_row_signature(&d));
+}
+
 TEST(test_inspect_row_signature_zero_row_nonzero_hash) {
     /* All-zero row must still produce a non-zero signature so the
      * "uninitialized slot" sentinel (sig == 0 in client state) isn't
@@ -91,5 +111,6 @@ void register_inspect_anim_tests(void) {
     RUN(test_inspect_row_signature_diff_on_receipt_head_change);
     RUN(test_inspect_row_signature_diff_on_chain_len_change);
     RUN(test_inspect_row_signature_diff_on_grouped_flag);
+    RUN(test_inspect_row_signature_diff_on_event_id_high_bits);
     RUN(test_inspect_row_signature_zero_row_nonzero_hash);
 }
