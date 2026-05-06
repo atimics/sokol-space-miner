@@ -590,15 +590,33 @@ static void hud_draw_inspect_snapshot_pane(float screen_w, float screen_h) {
         visible_units += qty;
         bool grouped = (row->flags & INSPECT_ROW_GROUPED) != 0;
 
+        /* On grouped rows, chain_len is repurposed as the prefix_class
+         * of the bucket (0 = ANONYMOUS bulk, otherwise a named class). */
+        const char *prefix_label = NULL;
+        if (grouped) {
+            switch ((ingot_prefix_t)row->chain_len) {
+            case INGOT_PREFIX_M:            prefix_label = "M class"; break;
+            case INGOT_PREFIX_H:            prefix_label = "H class"; break;
+            case INGOT_PREFIX_T:            prefix_label = "T class"; break;
+            case INGOT_PREFIX_S:            prefix_label = "S class"; break;
+            case INGOT_PREFIX_F:            prefix_label = "F class"; break;
+            case INGOT_PREFIX_K:            prefix_label = "K class"; break;
+            case INGOT_PREFIX_RATI:         prefix_label = "RATi class"; break;
+            case INGOT_PREFIX_COMMISSIONED: prefix_label = "RATi*"; break;
+            case INGOT_PREFIX_ANONYMOUS:
+            default:                        prefix_label = NULL; break;
+            }
+        }
+
         uint8_t rr, gg, bb;
         mining_grade_rgb((mining_grade_t)row->grade, &rr, &gg, &bb);
         float y = next_y;
         sdtx_pos(px / cell, y / cell);
         sdtx_color4b(rr, gg, bb, 235);
-        sdtx_printf("%-5s %s %-9s x%u",
+        sdtx_printf("%-5s %s %-10s x%u",
                     hud_grade_short_label(row->grade),
                     commodity_code((commodity_t)row->commodity),
-                    cargo,
+                    prefix_label ? prefix_label : cargo,
                     qty);
 
         next_y = y + 14.0f;
