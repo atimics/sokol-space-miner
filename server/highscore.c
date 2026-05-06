@@ -1,5 +1,6 @@
 #include "highscore.h"
 
+#include "base58.h"
 #include "chain_log.h"
 #include "sha256.h"
 
@@ -375,13 +376,31 @@ static void iterate_log_dir(const char *chain_dir, log_dir_cb cb, void *user) {
 #endif
 }
 
+/* Verify the on-disk chain log via the pubkey decoded from its
+ * filename (signature + linkage + payload-hash + monotonic). Replay
+ * sources its data from these logs, so an unverified file must never
+ * become canonical leaderboard input — a corrupted active log or a
+ * forged orphan is exactly the threat the chain log was designed
+ * against. Returns true only if the filename decodes to a 32-byte
+ * pubkey and the full log walks cleanly under that pubkey. */
+static bool verify_chain_log_at(const char *full_path, const char *base_name) {
+    uint8_t pubkey[32];
+    if (base58_decode(base_name, pubkey, 32) != 32) return false;
+    FILE *f = fopen(full_path, "rb");
+    if (!f) return false;
+    chain_log_verify_report_t report;
+    bool ok = chain_log_verify_with_pubkey(f, pubkey, &report);
+    fclose(f);
+    return ok;
+}
+
 /* Map-build pass: open file and walk for victim-token/callsign collection. */
 typedef struct {
     token_map_t *map;
 } pass_map_user_t;
 
 static void pass_map_cb(const char *full_path, const char *base_name, void *user) {
-    (void)base_name;
+    if (!verify_chain_log_at(full_path, base_name)) return;
     pass_map_user_t *p = (pass_map_user_t *)user;
     FILE *f = fopen(full_path, "rb");
     if (!f) return;
@@ -396,6 +415,7 @@ typedef struct {
 } pass_replay_user_t;
 
 static void pass_replay_cb(const char *full_path, const char *base_name, void *user) {
+    if (!verify_chain_log_at(full_path, base_name)) return;
     pass_replay_user_t *p = (pass_replay_user_t *)user;
     FILE *f = fopen(full_path, "rb");
     if (!f) return;

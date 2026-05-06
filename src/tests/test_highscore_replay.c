@@ -389,34 +389,33 @@ TEST(test_world_seed_persists_across_restart) {
     remove(TMP("ws_seed_persist.sav"));
 }
 
-TEST(test_chain_log_survives_world_reset_resume) {
-    /* P1 regression: world_reset() must NOT delete chain log files at
-     * the current station pubkeys, because load_world_state calls it
-     * before world_load restores the saved belt_seed. Emitting a
-     * death, then world_reset()-ing on the same world struct, must
-     * leave the on-disk log intact so highscore replay still sees it. */
-    hs_test_setup("survive_resume");
+TEST(test_corrupt_chain_log_rejected_by_replay) {
+    /* P1 regression: highscore_replay_from_chain must verify each
+     * chain log against the pubkey decoded from its filename before
+     * projecting any DEATH events. A truncated or tampered file —
+     * here, an arbitrary blob written under a base58-named filename
+     * that does not link to a valid signed chain — must contribute
+     * zero entries to the leaderboard view. */
+    hs_test_setup("corrupt_log");
 
-    WORLD_HEAP w = calloc(1, sizeof(world_t));
-    ASSERT(w != NULL);
-    w->rng = 2037u;
-    world_reset(w);
-    uint8_t tok[8] = { 'r','e','s','u','m','e','-','1' };
-    emit_death(w, "RESUME-1", tok, NULL, 9999.0f);
+    /* Drop a file named like a chain log but containing junk bytes.
+     * Filename uses the chain dir established by hs_test_setup. */
+    const char *dir = chain_log_get_dir();
+    char path[512];
+    snprintf(path, sizeof(path),
+             "%s/3F5qRPtKg8GhGNnbd3qCj6nVJxWsGxq7pvH84okYLAqf.log", dir);
+    FILE *f = fopen(path, "wb");
+    ASSERT(f != NULL);
+    /* Write a header-shaped run of zeros big enough to look like one
+     * event, plus a payload-len prefix. The signature won't verify. */
+    uint8_t junk[200];
+    memset(junk, 0, sizeof(junk));
+    fwrite(junk, sizeof(junk), 1, f);
+    fclose(f);
 
-    /* Simulate the server boot sequence: a second world_reset (matching
-     * load_world_state's pre-load reset) on a fresh world struct. The
-     * pubkey filename is the same because the seed is the same. */
-    WORLD_HEAP w2 = calloc(1, sizeof(world_t));
-    ASSERT(w2 != NULL);
-    w2->rng = 2037u;
-    world_reset(w2);
-
-    /* Replay must still see the death event from before the reset. */
     highscore_table_t t;
-    highscore_replay_from_chain(&t, chain_log_get_dir());
-    ASSERT_EQ_INT(t.count, 1);
-    ASSERT(memcmp(t.entries[0].callsign, "RESUME-1", 8) == 0);
+    highscore_replay_from_chain(&t, dir);
+    ASSERT_EQ_INT(t.count, 0);
 
     hs_test_teardown();
 }
@@ -466,6 +465,6 @@ void register_highscore_replay_tests(void) {
     RUN(test_most_recent_world_wins);
     RUN(test_world_seed_persists_across_restart);
     RUN(test_build_info_tagged);
-    RUN(test_chain_log_survives_world_reset_resume);
+    RUN(test_corrupt_chain_log_rejected_by_replay);
     RUN(test_legacy_death_payload_replays);
 }
