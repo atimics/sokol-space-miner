@@ -1798,12 +1798,22 @@ static bool draw_death_overlay(float screen_w, float screen_h) {
                     memcpy(cs, g.highscores[i].callsign, 8);
                     cs[8] = '\0';
                     for (int k = 7; k >= 0 && (cs[k] == ' ' || cs[k] == '\0'); k--) cs[k] = '\0';
+                    char kb[9];
+                    memcpy(kb, g.highscores[i].killed_by, 8);
+                    kb[8] = '\0';
+                    for (int k = 7; k >= 0 && (kb[k] == ' ' || kb[k] == '\0'); k--) kb[k] = '\0';
                     bool is_me = (g.death_credits_earned > 0.5f
                                   && fabsf(g.highscores[i].credits_earned - g.death_credits_earned) < 0.5f);
                     if (is_me) sdtx_color4b(PAL_DEATH_EARNED, a8);
                     else       sdtx_color4b(PAL_TEXT_FADED,  a8);
                     sdtx_pos(left, row);
-                    sdtx_printf("%2d. %-8s %8.0f", i + 1, cs, g.highscores[i].credits_earned);
+                    /* callsign / credits / killed-by / build. world_id is
+                     * kept in the data but dropped from the visible row
+                     * to keep the line readable on narrow viewports. */
+                    sdtx_printf("%2d. %-8s %7.0f  %-8s b#%08x",
+                                i + 1, cs, g.highscores[i].credits_earned,
+                                kb[0] ? kb : "-",
+                                g.highscores[i].build_id);
                     row += 1.4f;
                 }
             } else {

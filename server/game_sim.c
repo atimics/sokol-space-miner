@@ -5242,6 +5242,14 @@ void world_reset(world_t *w) {
     free(grid_entries);
     memset(w, 0, sizeof(*w));
     w->signal_cache.strength = sig_buf; /* restore — signal_grid_build reuses it */
+    /* Caller-supplied non-zero seed → reproducible (test fixtures, save
+     * load with persisted belt_seed). The server's load_world_state()
+     * pre-stamps a fresh wall-clock seed before calling world_reset on
+     * a clean boot, so production sees a new belt_seed every restart;
+     * tests get the deterministic 2037 fallback. The chain log replay
+     * (highscore_replay_from_chain) treats prior worlds' on-disk logs
+     * as orphans and rebuilds the leaderboard view from them, so
+     * rotation never loses history. */
     w->rng = seed ? seed : 2037u;
     w->belt_seed = w->rng;  /* anchor for rock_pub derivation (#285) */
     /* Wipe process-level nav scratch so a freshly-reset world doesn't
@@ -5257,23 +5265,23 @@ void world_reset(world_t *w) {
      * Derive deterministic Ed25519 keypairs for the three seeded
      * stations from the world seed *before* any other identity logic
      * runs, so subsequent code (catalog save, signal_chain bootstrap,
-     * etc.) sees stations with stable pubkeys. */
+     * etc.) sees stations with stable pubkeys. New seed → new pubkeys
+     * → new chain log filenames; previous worlds' logs survive on
+     * disk under their old pubkeys and feed the highscore replay. */
     for (int s = 0; s < 3; s++)
         station_authority_init_seeded(&w->stations[s], w->belt_seed,
                                        (uint32_t)s);
 
-    /* --- Chain log reset (Layer C of #479) ---
-     * world_reset() blows away in-memory state. Match it on disk: the
-     * seeded stations' chain log files (if any from a previous run)
-     * must go too, otherwise the next emit's prev_hash (which we just
-     * zeroed above via memset(w, 0, ...)) won't chain to the on-disk
-     * tail and the verifier will reject. */
-    for (int s = 0; s < 3; s++) {
-        memset(w->stations[s].chain_last_hash, 0,
-               sizeof(w->stations[s].chain_last_hash));
-        w->stations[s].chain_event_count = 0;
+    /* In-memory chain state is implicitly zero from the memset above.
+     * Defensive: also remove any existing chain file at the new pubkey's
+     * path. Should be a no-op when belt_seed actually rotated (the
+     * pubkey is fresh, no file exists), but if the seed repeats — test
+     * fixtures, save load with persisted seed — we'd otherwise pick up
+     * an orphaned tail and chain emit's prev_hash linkage would fail.
+     * Prior worlds' files at *different* pubkey filenames survive and
+     * feed the highscore replay. */
+    for (int s = 0; s < 3; s++)
         chain_log_reset(&w->stations[s]);
-    }
 
     /* --- Stations ---
      *
